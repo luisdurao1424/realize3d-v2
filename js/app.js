@@ -1177,8 +1177,11 @@ function render(){
    INIT
 --------------------------------------------------------------- */
 (async function init(){
-  const format = await import(new URL('core/format.js', document.currentScript.src).href);
+  const appSrc = document.currentScript.src;
+  const format = await import(new URL('core/format.js', appSrc).href);
   Object.assign(window, format);
+  const store = await import(new URL('core/store.js', appSrc).href);
+  store.Store.set(state);
 
   const ready = await loadAll();
   document.getElementById('loadingScreen').style.display = 'none';
