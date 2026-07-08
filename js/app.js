@@ -480,6 +480,7 @@ async function saveCalcToHistory(){
     precoVenda:b.precoVenda, recebido:null, status:'orcamento', data:todayISO(), notas:''
   };
   state.pedidos.unshift(pedido);
+  if (window.AutoSave) window.AutoSave.schedule();
   await savePedidos();
   toast('Guardado no histórico');
   clearCalc();
@@ -648,6 +649,7 @@ function confirmDeletePedido(id){
 }
 async function doDeletePedido(id){
   state.pedidos = state.pedidos.filter(p=>p.id!==id);
+  if (window.AutoSave) window.AutoSave.schedule();
   await savePedidos();
   closeModal();
   toast('Registo eliminado');
@@ -670,6 +672,7 @@ async function doDuplicatePedido(){
     recebido: null, status:'orcamento', data: todayISO()
   };
   state.pedidos.unshift(novo);
+  if (window.AutoSave) window.AutoSave.schedule();
   await savePedidos();
   closeModal();
   toast('Projeto duplicado');
@@ -683,6 +686,7 @@ async function confirmVenda(){
   p.recebido = valor;
   p.status = 'vendido';
   if(!p.data) p.data = todayISO();
+  if (window.AutoSave) window.AutoSave.schedule();
   await savePedidos();
   closeModal();
   toast('Marcado como vendido');
@@ -706,6 +710,7 @@ async function saveEditPedido(){
   const b = calcBreakdown({materiais:p.materiais,horas:p.horas,addons:p.addons,taxaFalhas:p.taxaFalhas,margemLucro:p.margemLucro});
   p.custoFilamento = b.custoFilamento; p.custoEletricidade = b.custoEletricidade;
   p.custoFinal = b.custoFinal; p.precoVenda = b.precoVenda;
+  if (window.AutoSave) window.AutoSave.schedule();
   await savePedidos();
   closeModal();
   toast('Registo atualizado');
@@ -785,6 +790,7 @@ async function saveFilModal(){
   }else{
     state.filamentos.push({id:uid(), ...rec});
   }
+  if (window.AutoSave) window.AutoSave.schedule();
   await saveFilamentos();
   closeModal();
   toast('Filamento guardado');
@@ -796,6 +802,7 @@ function confirmDeleteFil(id){
 }
 async function doDeleteFil(id){
   state.filamentos = state.filamentos.filter(f=>f.id!==id);
+  if (window.AutoSave) window.AutoSave.schedule();
   await saveFilamentos();
   closeModal();
   toast('Filamento eliminado');
@@ -869,6 +876,7 @@ function renderCfg(){
 }
 let cfgSaveTimer=null;
 function saveConfigDebounced(){
+  if (window.AutoSave) window.AutoSave.schedule();
   clearTimeout(cfgSaveTimer);
   cfgSaveTimer = setTimeout(async ()=>{ await saveConfig(); toast('Definições guardadas'); }, 500);
 }
@@ -898,6 +906,7 @@ function importBackup(file){
       state.config = data.config || {...DEFAULT_CONFIG};
       state.filamentos = data.filamentos || [];
       state.pedidos = data.pedidos || [];
+      if (window.AutoSave) window.AutoSave.schedule();
       await saveConfig(); await saveFilamentos(); await savePedidos();
       toast('Dados importados com sucesso');
       render();
@@ -1182,6 +1191,11 @@ function render(){
   Object.assign(window, format);
   const store = await import(new URL('core/store.js', appSrc).href);
   store.Store.set(state);
+  const autosave = await import(new URL('services/autosave.js', appSrc).href);
+  autosave.AutoSave.init({
+    save: pushPayload,
+    hasWorkspace: () => Boolean(workspaceCode),
+  });
 
   const ready = await loadAll();
   document.getElementById('loadingScreen').style.display = 'none';
