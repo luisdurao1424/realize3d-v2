@@ -90,19 +90,6 @@ let state = {
 
 function uid(){ return Math.random().toString(36).slice(2,10) + Date.now().toString(36).slice(-4); }
 function filKey(marca,cor){ return (marca||'')+'__'+(cor||''); }
-function fmtEUR(n){
-  if(n===null||n===undefined||isNaN(n)) return '—';
-  return n.toLocaleString('pt-PT',{minimumFractionDigits:2,maximumFractionDigits:2})+' €';
-}
-function fmtNum(n,d=1){ if(n===null||n===undefined||isNaN(n)) return '—'; return n.toLocaleString('pt-PT',{minimumFractionDigits:0,maximumFractionDigits:d}); }
-function fmtPct(n){ return (n*100).toLocaleString('pt-PT',{maximumFractionDigits:1}) + '%'; }
-function fmtDate(d){
-  if(!d) return '—';
-  const dt = new Date(d);
-  if(isNaN(dt)) return '—';
-  return dt.toLocaleDateString('pt-PT',{day:'2-digit',month:'2-digit',year:'numeric'});
-}
-function todayISO(){ return new Date().toISOString().slice(0,10); }
 
 /* ---------------------------------------------------------------
    SUPABASE CONFIG
@@ -259,8 +246,6 @@ function toast(msg){
   clearTimeout(toastTimer);
   toastTimer = setTimeout(()=>el.classList.remove('show'), 2200);
 }
-function escapeHtml(s){ return (s===null||s===undefined)?'':String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-
 /* ---------------------------------------------------------------
    NAV
 --------------------------------------------------------------- */
@@ -1192,6 +1177,9 @@ function render(){
    INIT
 --------------------------------------------------------------- */
 (async function init(){
+  const format = await import(new URL('core/format.js', document.currentScript.src).href);
+  Object.assign(window, format);
+
   const ready = await loadAll();
   document.getElementById('loadingScreen').style.display = 'none';
   if(!ready){
