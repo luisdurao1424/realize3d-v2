@@ -491,6 +491,7 @@ function pedidoLoteDetailHtml(p){
 }
 
 function sameCostInputs(p, form){
+  const sameNumber = (a,b)=> (parseFloat(a)||0) === (parseFloat(b)||0);
   const prev = (p.materiais||[]).map(m=>({
     filKey:filKey(m.marca,m.cor),
     gramas:parseFloat(m.gramas)||0
@@ -504,10 +505,14 @@ function sameCostInputs(p, form){
     if(prev[i].filKey !== next[i].filKey) return false;
     if(prev[i].gramas !== next[i].gramas) return false;
   }
-  if((parseFloat(p.horas)||0) !== (parseFloat(form.horas)||0)) return false;
-  if((parseFloat(p.addons)||0) !== (parseFloat(form.addons)||0)) return false;
-  if('taxaFalhas' in form && (parseFloat(p.taxaFalhas)||0) !== (parseFloat(form.taxaFalhas)||0)) return false;
-  if('margemLucro' in form && (parseFloat(p.margemLucro)||0) !== (parseFloat(form.margemLucro)||0)) return false;
+  if(!sameNumber(p.horas, form.horas)) return false;
+  if(!sameNumber(p.addons, form.addons)) return false;
+  if('taxaFalhas' in form && !sameNumber(p.taxaFalhas, form.taxaFalhas)) return false;
+  if('bufferFalhas' in form && !sameNumber(p.bufferFalhas, form.bufferFalhas)) return false;
+  if('margemLucro' in form && !sameNumber(p.margemLucro, form.margemLucro)) return false;
+  if('precoManual' in form && !sameNumber(p.precoManual, form.precoManual)) return false;
+  if('precoVenda' in form && !sameNumber(p.precoVenda, form.precoVenda)) return false;
+  if('custoFinal' in form && !sameNumber(p.custoFinal, form.custoFinal)) return false;
   return true;
 }
 
@@ -1094,6 +1099,7 @@ async function saveEditPedido(){
   const f = m.form;
   if(!f.projeto || !f.projeto.trim()){ toast('O projeto precisa de um nome'); return; }
   const shouldRecalculate = !sameCostInputs(p, f);
+  console.log(shouldRecalculate ? 'Snapshot: recalculado' : 'Snapshot: mantido');
   let resolved = [];
   if(shouldRecalculate){
     resolved = resolveMateriais(f.materiais).filter(m=>m.marca && m.gramas>0);
