@@ -112,6 +112,7 @@ try{
    cópia local em localStorage como cache/reserva offline
 --------------------------------------------------------------- */
 const STORAGE_PREFIX = 'realize3d_';
+const LAST_WORKSPACE_KEY = 'realize3d_last_workspace';
 let workspaceCode = null;
 
 function lsGet(key){
@@ -121,6 +122,28 @@ function lsGet(key){
 function lsSet(key, value){
   try{ localStorage.setItem(STORAGE_PREFIX+key, value); return true; }
   catch(e){ return false; }
+}
+function getLastWorkspace(){
+  try{ return localStorage.getItem(LAST_WORKSPACE_KEY); }
+  catch(e){ return null; }
+}
+function setLastWorkspace(code){
+  try{ localStorage.setItem(LAST_WORKSPACE_KEY, code); return true; }
+  catch(e){ return false; }
+}
+function clearLastWorkspace(){
+  try{ localStorage.removeItem(LAST_WORKSPACE_KEY); }
+  catch(e){}
+}
+function getUrlWorkspace(){
+  try{
+    const code = new URLSearchParams(window.location.search).get('workspace');
+    return code ? code.trim().toUpperCase() : null;
+  }
+  catch(e){ return null; }
+}
+function workspaceDirectLink(code = workspaceCode){
+  return `${window.location.origin}${window.location.pathname}?workspace=${code}`;
 }
 
 function setSyncStatus(status){
@@ -153,7 +176,16 @@ function currentPayload(){
 
 // returns true if the app is ready to show; false if the setup screen should be shown instead
 async function loadAll(){
-  workspaceCode = lsGet('workspace');
+  const urlWorkspace = getUrlWorkspace();
+  const lastWorkspace = getLastWorkspace();
+  if(urlWorkspace){
+    console.log('Workspace: parâmetro URL encontrado');
+    console.log('Workspace: abertura por URL iniciada');
+  }else if(lastWorkspace){
+    console.log('Workspace: último workspace encontrado');
+    console.log('Workspace: auto abertura iniciada');
+  }
+  workspaceCode = urlWorkspace || lastWorkspace || lsGet('workspace');
   if(!workspaceCode){
     return false;
   }
@@ -162,6 +194,9 @@ async function loadAll(){
     const cached = lsGet('cache_payload');
     applyPayload(cached ? JSON.parse(cached) : defaultPayload());
     setSyncStatus('offline');
+    setLastWorkspace(workspaceCode);
+    if(urlWorkspace) console.log('Workspace: abertura por URL concluída');
+    else if(lastWorkspace) console.log('Workspace: auto abertura concluída');
     return true;
   }
   try{
@@ -171,8 +206,22 @@ async function loadAll(){
     applyPayload(data.payload || {});
     lsSet('cache_payload', JSON.stringify(data.payload || {}));
     setSyncStatus('ok');
+    setLastWorkspace(workspaceCode);
+    if(urlWorkspace) console.log('Workspace: abertura por URL concluída');
+    else if(lastWorkspace) console.log('Workspace: auto abertura concluída');
   }catch(e){
     console.error(e);
+    if(urlWorkspace){
+      console.log('Workspace: abertura por URL falhou');
+      workspaceCode = null;
+      return false;
+    }
+    if(lastWorkspace){
+      console.log('Workspace: auto abertura falhou');
+      clearLastWorkspace();
+      workspaceCode = null;
+      return false;
+    }
     const cached = lsGet('cache_payload');
     applyPayload(cached ? JSON.parse(cached) : defaultPayload());
     setSyncStatus('offline');
@@ -274,7 +323,7 @@ function renderSidebar(){
   const vendidos = state.pedidos.filter(p=>p.status==='vendido').length;
   document.getElementById('sidebarFoot').innerHTML = `
     ${syncBadgeHtml()}
-    ${workspaceCode ? `<div class="workspace-code-chip" style="margin-bottom:10px;"><span>${escapeHtml(workspaceCode)}</span><button onclick="copyWorkspaceCode()" title="Copiar código">${ICONS.copy}</button></div>` : ''}
+    ${workspaceCode ? `<div class="workspace-code-chip" style="margin-bottom:10px;"><span>${escapeHtml(workspaceCode)}</span><button onclick="copyWorkspaceCode()" title="Copiar código">${ICONS.copy}</button><button onclick="copyWorkspaceLink()" title="Copiar link direto">${ICONS.copy}</button></div>` : ''}
     <div class="stat"><span>impressões registadas</span><b>${totalPedidos}</b></div>
     <div class="stat"><span>vendidas</span><b>${vendidos}</b></div>
     <div class="stat"><span>filamentos na base</span><b>${state.filamentos.length}</b></div>
@@ -855,7 +904,7 @@ function renderCfg(){
         Os teus dados ficam guardados na cloud, associados ao código de espaço abaixo.
         Usa o mesmo código noutro computador ou telemóvel para veres os mesmos dados.
       </p>
-      ${workspaceCode ? `<div class="workspace-code-chip" style="max-width:220px;margin-bottom:12px;"><span>${escapeHtml(workspaceCode)}</span><button onclick="copyWorkspaceCode()" title="Copiar código">${ICONS.copy}</button></div>` : ''}
+      ${workspaceCode ? `<div class="workspace-code-chip" style="max-width:220px;margin-bottom:12px;"><span>${escapeHtml(workspaceCode)}</span><button onclick="copyWorkspaceCode()" title="Copiar código">${ICONS.copy}</button><button onclick="copyWorkspaceLink()" title="Copiar link direto">${ICONS.copy}</button></div>` : ''}
       <div>${syncBadgeHtml()}</div>
       <button class="btn btn-ghost btn-sm" style="margin-top:12px;" onclick="confirmSwitchWorkspace()">Mudar de espaço / sair</button>
     </div>
@@ -1095,6 +1144,7 @@ async function setupCreateWorkspace(){
     const {error} = await sb.from(TABLE_NAME).insert({id:code, payload});
     if(error) throw error;
     lsSet('workspace', code);
+    setLastWorkspace(code);
     lsSet('cache_payload', JSON.stringify(payload));
     workspaceCode = code;
     applyPayload(payload);
@@ -1119,6 +1169,7 @@ async function setupJoinWorkspace(){
     if(error) throw error;
     if(!data){ setupUi.loading=false; setupUi.error='Código não encontrado.'; renderSetupBody(); return; }
     lsSet('workspace', code);
+    setLastWorkspace(code);
     lsSet('cache_payload', JSON.stringify(data.payload||{}));
     workspaceCode = code;
     applyPayload(data.payload||{});
@@ -1152,11 +1203,16 @@ function confirmSwitchWorkspace(){
 }
 function doSwitchWorkspace(){
   localStorage.removeItem(STORAGE_PREFIX+'workspace');
+  clearLastWorkspace();
   location.reload();
 }
 function copyWorkspaceCode(){
   if(!workspaceCode) return;
   navigator.clipboard?.writeText(workspaceCode).then(()=>toast('Código copiado')).catch(()=>{});
+}
+function copyWorkspaceLink(){
+  if(!workspaceCode) return;
+  navigator.clipboard?.writeText(workspaceDirectLink()).then(()=>toast('Link copiado')).catch(()=>{});
 }
 
 /* ---------------------------------------------------------------
