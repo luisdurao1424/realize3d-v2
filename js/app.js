@@ -357,6 +357,118 @@ function getLoteSnapshot(filamento){
   };
 }
 
+function buildPedidoMaterialSnapshot(m){
+  const snap = m.loteSnapshot || {};
+  return {
+    marca:m.marca,
+    cor:m.cor,
+    gramas:m.gramas,
+    precoKg:m.precoKg,
+    filamentoId:snap.filamentoId || m.filamentoId || null,
+    loteId:snap.loteId || null,
+    loteNome:snap.loteNome || '',
+    lotePrecoKg:snap.lotePrecoKg || null,
+    loteFornecedor:snap.loteFornecedor || '',
+    loteData:snap.loteData || '',
+    loteSnapshot:snap.loteId ? {...snap} : null
+  };
+}
+
+function buildCostSnapshot({materiais, horas, addons, taxaFalhas, margemLucro, breakdown}){
+  const mats = materiais || [];
+  const first = mats[0] || {};
+  // Snapshots preserve historical cost values and must not be recalculated when filament lot prices change.
+  return {
+    filamentoId:first.filamentoId || null,
+    loteId:first.loteId || null,
+    loteNome:first.loteNome || '',
+    lotePrecoKg:first.lotePrecoKg ?? first.precoKg ?? null,
+    loteFornecedor:first.loteFornecedor || '',
+    loteData:first.loteData || '',
+    gramas:mats.reduce((s,m)=>s+(parseFloat(m.gramas)||0),0),
+    horas:parseFloat(horas)||0,
+    addons:parseFloat(addons)||0,
+    custoFilamento:breakdown.custoFilamento,
+    custoEletricidade:breakdown.custoEletricidade,
+    custoTotal:breakdown.custoFinal,
+    custoFinal:breakdown.custoFinal,
+    precoFinal:breakdown.precoVenda,
+    precoVenda:breakdown.precoVenda,
+    lucro:breakdown.lucroValor,
+    lucroValor:breakdown.lucroValor,
+    margem:margemLucro,
+    taxaFalhas,
+    criadoEm:new Date().toISOString(),
+    materiais:mats.map(m=>({
+      filamentoId:m.filamentoId || null,
+      loteId:m.loteId || null,
+      loteNome:m.loteNome || '',
+      lotePrecoKg:m.lotePrecoKg ?? m.precoKg ?? null,
+      loteFornecedor:m.loteFornecedor || '',
+      loteData:m.loteData || '',
+      marca:m.marca,
+      cor:m.cor,
+      gramas:m.gramas,
+      precoKg:m.precoKg,
+      custoFilamento:((parseFloat(m.gramas)||0) * (parseFloat(m.precoKg)||0))/1000
+    }))
+  };
+}
+
+function getPedidoCostValues(p){
+  const snap = p?.costSnapshot;
+  if(snap){
+    return {
+      custoFilamento:snap.custoFilamento ?? p.custoFilamento ?? 0,
+      custoEletricidade:snap.custoEletricidade ?? p.custoEletricidade ?? 0,
+      custoFinal:snap.custoFinal ?? snap.custoTotal ?? p.custoFinal ?? 0,
+      precoVenda:snap.precoVenda ?? snap.precoFinal ?? p.precoVenda ?? 0,
+      lucroValor:snap.lucroValor ?? snap.lucro ?? p.lucroValor ?? 0,
+      margem:snap.margem ?? p.margemLucro ?? 0,
+      lotePrecoKg:snap.lotePrecoKg ?? null
+    };
+  }
+  return {
+    custoFilamento:p?.custoFilamento ?? 0,
+    custoEletricidade:p?.custoEletricidade ?? 0,
+    custoFinal:p?.custoFinal ?? 0,
+    precoVenda:p?.precoVenda ?? 0,
+    lucroValor:p?.lucroValor ?? 0,
+    margem:p?.margemLucro ?? 0,
+    lotePrecoKg:null
+  };
+}
+
+function sameCostInputs(p, form){
+  const prev = (p.materiais||[]).map(m=>({
+    filKey:filKey(m.marca,m.cor),
+    gramas:parseFloat(m.gramas)||0
+  }));
+  const next = (form.materiais||[]).map(m=>({
+    filKey:m.filKey || '',
+    gramas:parseFloat(m.gramas)||0
+  }));
+  if(prev.length !== next.length) return false;
+  for(let i=0;i<prev.length;i++){
+    if(prev[i].filKey !== next[i].filKey) return false;
+    if(prev[i].gramas !== next[i].gramas) return false;
+  }
+  if((parseFloat(p.horas)||0) !== (parseFloat(form.horas)||0)) return false;
+  if((parseFloat(p.addons)||0) !== (parseFloat(form.addons)||0)) return false;
+  if('taxaFalhas' in form && (parseFloat(p.taxaFalhas)||0) !== (parseFloat(form.taxaFalhas)||0)) return false;
+  if('margemLucro' in form && (parseFloat(p.margemLucro)||0) !== (parseFloat(form.margemLucro)||0)) return false;
+  return true;
+}
+
+function applyPedidoBreakdown(pedido, b){
+  pedido.custoFilamento = b.custoFilamento;
+  pedido.custoEletricidade = b.custoEletricidade;
+  pedido.custoFinal = b.custoFinal;
+  pedido.bufferFalhas = b.bufferFalhas;
+  pedido.lucroValor = b.lucroValor;
+  pedido.precoVenda = b.precoVenda;
+}
+
 function nextLoteId(lotes){
   const max = (lotes || []).reduce((n,l)=>{
     const m = String(l?.id || '').match(/^L(\d+)$/);
@@ -669,20 +781,17 @@ async function saveCalcToHistory(){
   if(validMateriais.length===0){ toast('Escolhe pelo menos um filamento e indica as gramas'); return; }
   if(!c.projeto || !c.projeto.trim()){ toast('Dá um nome ao projeto'); return; }
   const b = calcBreakdown({materiais:validMateriais,horas,addons,taxaFalhas,margemLucro});
+  const pedidoMateriais = validMateriais.map(buildPedidoMaterialSnapshot);
   const pedido = {
     id:uid(), projeto:c.projeto.trim(),
-    materiais: validMateriais.map(m=>({
-      marca:m.marca,
-      cor:m.cor,
-      gramas:m.gramas,
-      precoKg:m.precoKg,
-      loteSnapshot:m.loteSnapshot
-    })),
+    materiais: pedidoMateriais,
     horas:parseFloat(horas)||0, addons:parseFloat(addons)||0,
     taxaFalhas, margemLucro,
     custoFilamento:b.custoFilamento, custoEletricidade:b.custoEletricidade, custoFinal:b.custoFinal,
+    bufferFalhas:b.bufferFalhas, lucroValor:b.lucroValor,
     precoVenda:b.precoVenda, recebido:null, status:'orcamento', data:todayISO(), notas:''
   };
+  pedido.costSnapshot = buildCostSnapshot({materiais:pedidoMateriais, horas, addons, taxaFalhas, margemLucro, breakdown:b});
   state.pedidos.unshift(pedido);
   if (window.AutoSave) window.AutoSave.schedule();
   await savePedidos();
@@ -710,11 +819,13 @@ function pedidosFiltrados(){
       return sort==='data_desc' ? db-da : da-db;
     }
     if(sort==='lucro_desc'){
-      const la = a.recebido!==null ? a.recebido-a.custoFinal : -Infinity;
-      const lb = b.recebido!==null ? b.recebido-b.custoFinal : -Infinity;
+      const ca = getPedidoCostValues(a);
+      const cb = getPedidoCostValues(b);
+      const la = a.recebido!==null ? a.recebido-ca.custoFinal : -Infinity;
+      const lb = b.recebido!==null ? b.recebido-cb.custoFinal : -Infinity;
       return lb-la;
     }
-    if(sort==='custo_desc') return b.custoFinal-a.custoFinal;
+    if(sort==='custo_desc') return getPedidoCostValues(b).custoFinal-getPedidoCostValues(a).custoFinal;
     return 0;
   });
   return list;
@@ -723,9 +834,9 @@ function pedidosFiltrados(){
 function renderHist(){
   const list = pedidosFiltrados();
   const all = state.pedidos;
-  const totalCusto = all.reduce((s,p)=>s+(p.custoFinal||0),0);
+  const totalCusto = all.reduce((s,p)=>s+getPedidoCostValues(p).custoFinal,0);
   const totalRecebido = all.filter(p=>p.recebido!==null).reduce((s,p)=>s+p.recebido,0);
-  const totalLucro = all.filter(p=>p.recebido!==null).reduce((s,p)=>s+(p.recebido-p.custoFinal),0);
+  const totalLucro = all.filter(p=>p.recebido!==null).reduce((s,p)=>s+(p.recebido-getPedidoCostValues(p).custoFinal),0);
   const pendentes = all.filter(p=>p.status==='orcamento').length;
 
   return `
@@ -782,14 +893,15 @@ function renderHistTable(){
       </tr></thead>
       <tbody>
         ${list.map(p=>{
-          const lucro = p.recebido!==null ? (p.recebido - p.custoFinal) : null;
+          const costs = getPedidoCostValues(p);
+          const lucro = p.recebido!==null ? (p.recebido - costs.custoFinal) : null;
           return `<tr>
             <td>${escapeHtml(p.projeto)}${p.data?`<div class="muted" style="font-size:11px;">${fmtDate(p.data)}</div>`:''}</td>
             <td class="muted">${(p.materiais||[]).map(m=>escapeHtml(m.marca)+' · '+escapeHtml(m.cor)).join('<br>')}</td>
             <td class="num">${fmtNum((p.materiais||[]).reduce((s,m)=>s+(m.gramas||0),0))}g</td>
             <td class="num">${fmtNum(p.horas)}h</td>
-            <td class="num">${fmtEUR(p.custoFinal)}</td>
-            <td class="num">${fmtEUR(p.precoVenda)}</td>
+            <td class="num">${fmtEUR(costs.custoFinal)}</td>
+            <td class="num">${fmtEUR(costs.precoVenda)}</td>
             <td class="num">${p.recebido!==null?fmtEUR(p.recebido):'—'}</td>
             <td class="num" style="color:${lucro===null?'var(--text-faint)':(lucro>=0?'var(--teal)':'var(--coral)')};">${lucro===null?'—':fmtEUR(lucro)}</td>
             <td>${p.status==='vendido'?`<span class="badge badge-vend">Vendido</span>`:`<span class="badge badge-orc">Orçamento</span>`}</td>
@@ -810,14 +922,17 @@ function renderHistTable(){
 
 function exportCSV(){
   const headers = ['Projeto','Materiais','GramasTotal','Horas','Addons','CustoFilamento','CustoEletricidade','CustoFinal','PrecoVendaSugerido','Recebido','Lucro','Estado','Data'];
-  const rows = state.pedidos.map(p=>[
-    p.projeto,
-    (p.materiais||[]).map(m=>`${m.marca} ${m.cor} (${m.gramas}g)`).join(' + '),
-    (p.materiais||[]).reduce((s,m)=>s+(m.gramas||0),0),
-    p.horas,p.addons,
-    p.custoFilamento.toFixed(4),p.custoEletricidade.toFixed(4),p.custoFinal.toFixed(4),p.precoVenda.toFixed(4),
-    p.recebido!==null?p.recebido:'', p.recebido!==null?(p.recebido-p.custoFinal).toFixed(4):'', p.status, p.data||''
-  ]);
+  const rows = state.pedidos.map(p=>{
+    const costs = getPedidoCostValues(p);
+    return [
+      p.projeto,
+      (p.materiais||[]).map(m=>`${m.marca} ${m.cor} (${m.gramas}g)`).join(' + '),
+      (p.materiais||[]).reduce((s,m)=>s+(m.gramas||0),0),
+      p.horas,p.addons,
+      costs.custoFilamento.toFixed(4),costs.custoEletricidade.toFixed(4),costs.custoFinal.toFixed(4),costs.precoVenda.toFixed(4),
+      p.recebido!==null?p.recebido:'', p.recebido!==null?(p.recebido-costs.custoFinal).toFixed(4):'', p.status, p.data||''
+    ];
+  });
   const csv = [headers.join(';'), ...rows.map(r=>r.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(';'))].join('\n');
   const blob = new Blob(['\ufeff'+csv], {type:'text/csv;charset=utf-8;'});
   const url = URL.createObjectURL(blob);
@@ -831,7 +946,7 @@ function exportCSV(){
 function openVendaModal(id){
   const p = state.pedidos.find(x=>x.id===id);
   if(!p) return;
-  state.modal = {type:'venda', id, valor: p.precoVenda.toFixed(2)};
+  state.modal = {type:'venda', id, valor: getPedidoCostValues(p).precoVenda.toFixed(2)};
   render();
 }
 function openEditPedidoModal(id){
@@ -869,12 +984,38 @@ async function doDuplicatePedido(){
   const p = state.pedidos.find(x=>x.id===m.id);
   if(!p) return;
   if(!m.nome || !m.nome.trim()){ toast('Dá um nome ao novo projeto'); return; }
+  const materiaisAtuais = resolveMateriais((p.materiais||[]).map(mat=>({
+    id:uid(),
+    filKey:filKey(mat.marca,mat.cor),
+    gramas:mat.gramas
+  }))).filter(mat=>mat.marca && mat.gramas>0);
+  const materiaisSnapshot = materiaisAtuais.length === (p.materiais||[]).length
+    ? materiaisAtuais.map(buildPedidoMaterialSnapshot)
+    : (p.materiais||[]).map(mat=>({...mat}));
+  const b = calcBreakdown({
+    materiais:materiaisSnapshot,
+    horas:p.horas,
+    addons:p.addons,
+    taxaFalhas:p.taxaFalhas,
+    margemLucro:p.margemLucro
+  });
   const novo = {
     ...p, id:uid(),
     projeto: m.nome.trim(),
-    materiais: p.materiais.map(mat=>({...mat})),
-    recebido: null, status:'orcamento', data: todayISO()
+    materiais: materiaisSnapshot,
+    recebido: null, status:'orcamento', data: todayISO(),
+    costSnapshot:null
   };
+  delete novo.costSnapshot;
+  applyPedidoBreakdown(novo, b);
+  novo.costSnapshot = buildCostSnapshot({
+    materiais:materiaisSnapshot,
+    horas:novo.horas,
+    addons:novo.addons,
+    taxaFalhas:novo.taxaFalhas,
+    margemLucro:novo.margemLucro,
+    breakdown:b
+  });
   state.pedidos.unshift(novo);
   if (window.AutoSave) window.AutoSave.schedule();
   await savePedidos();
@@ -901,25 +1042,32 @@ async function saveEditPedido(){
   if(!p) return;
   const f = m.form;
   if(!f.projeto || !f.projeto.trim()){ toast('O projeto precisa de um nome'); return; }
-  const resolved = resolveMateriais(f.materiais).filter(m=>m.marca && m.gramas>0);
-  if(resolved.length===0){ toast('Escolhe pelo menos um filamento e indica as gramas'); return; }
+  const shouldRecalculate = !sameCostInputs(p, f);
+  let resolved = [];
+  if(shouldRecalculate){
+    resolved = resolveMateriais(f.materiais).filter(m=>m.marca && m.gramas>0);
+    if(resolved.length===0){ toast('Escolhe pelo menos um filamento e indica as gramas'); return; }
+  }
   p.projeto = f.projeto.trim();
-  p.materiais = resolved.map(m=>({
-    marca:m.marca,
-    cor:m.cor,
-    gramas:m.gramas,
-    precoKg:m.precoKg,
-    loteSnapshot:m.loteSnapshot
-  }));
-  p.horas = parseFloat(f.horas)||0;
-  p.addons = parseFloat(f.addons)||0;
   p.data = f.data || null;
   p.status = f.status;
   p.recebido = (f.recebido===''||f.recebido===null) ? null : parseFloat(f.recebido);
   if(p.status==='orcamento') p.recebido = null;
-  const b = calcBreakdown({materiais:p.materiais,horas:p.horas,addons:p.addons,taxaFalhas:p.taxaFalhas,margemLucro:p.margemLucro});
-  p.custoFilamento = b.custoFilamento; p.custoEletricidade = b.custoEletricidade;
-  p.custoFinal = b.custoFinal; p.precoVenda = b.precoVenda;
+  if(shouldRecalculate){
+    p.materiais = resolved.map(buildPedidoMaterialSnapshot);
+    p.horas = parseFloat(f.horas)||0;
+    p.addons = parseFloat(f.addons)||0;
+    const b = calcBreakdown({materiais:p.materiais,horas:p.horas,addons:p.addons,taxaFalhas:p.taxaFalhas,margemLucro:p.margemLucro});
+    applyPedidoBreakdown(p, b);
+    p.costSnapshot = buildCostSnapshot({
+      materiais:p.materiais,
+      horas:p.horas,
+      addons:p.addons,
+      taxaFalhas:p.taxaFalhas,
+      margemLucro:p.margemLucro,
+      breakdown:b
+    });
+  }
   if (window.AutoSave) window.AutoSave.schedule();
   await savePedidos();
   closeModal();
