@@ -163,12 +163,14 @@ function syncBadgeHtml(){
 }
 
 function defaultPayload(){
-  return { config:{...DEFAULT_CONFIG}, filamentos:SEED_FILAMENTOS, pedidos:buildSeedPedidos() };
+  return { config:{...DEFAULT_CONFIG}, filamentos:migrateFilamentosToLotes(SEED_FILAMENTOS), pedidos:buildSeedPedidos() };
 }
 function applyPayload(payload){
   state.config = payload.config || {...DEFAULT_CONFIG};
   state.filamentos = payload.filamentos || SEED_FILAMENTOS;
+  migrateFilamentosToLotes();
   state.pedidos = payload.pedidos || [];
+  syncStoreState();
 }
 function currentPayload(){
   return { config: state.config, filamentos: state.filamentos, pedidos: state.pedidos };
@@ -260,7 +262,126 @@ function buildSeedPedidos(){
 /* ---------------------------------------------------------------
    CALCULATIONS
 --------------------------------------------------------------- */
-function getPrecoKg(f){ if(!f) return 0; const spool = f.spool || 1; return spool>0 ? f.preco/spool : 0; }
+function getLegacyPrecoKgFilamento(f){
+  if(!f) return 0;
+  const explicit = ['precoKg','custoKg'].map(k=>parseFloat(f[k])).find(v=>!isNaN(v) && v>0);
+  if(explicit) return explicit;
+  const precoCompra = parseFloat(f.precoCompra);
+  const precoBobina = parseFloat(f.precoBobina);
+  const preco = parseFloat(f.preco ?? f['preço'] ?? f.price);
+  const spool = parseFloat(f.spool || f.tamanho || f.kg || 1) || 1;
+  if(!isNaN(precoCompra) && precoCompra>0) return spool>0 ? precoCompra/spool : precoCompra;
+  if(!isNaN(precoBobina) && precoBobina>0) return spool>0 ? precoBobina/spool : precoBobina;
+  if(!isNaN(preco) && preco>0) return spool>0 ? preco/spool : preco;
+  return 0;
+}
+
+function createInitialLote(f){
+  const precoKg = getLegacyPrecoKgFilamento(f);
+  console.log('Lotes: lote inicial criado');
+  return {
+    id:'L001',
+    nome:'Lote inicial',
+    data:todayISO(),
+    fornecedor:'',
+    precoKg,
+    ativo:true,
+    arquivado:false,
+    criadoEm:new Date().toISOString()
+  };
+}
+
+function migrateFilamentosToLotes(filamentos = state.filamentos){
+  console.log('Lotes: migração iniciada');
+  if(!Array.isArray(filamentos)){
+    console.log('Lotes: migração concluída');
+    return [];
+  }
+  let created = false;
+  const migrated = filamentos.map(f=>{
+    if(!f) return f;
+    if(Array.isArray(f.lotes) && f.lotes.length>0) return f;
+    f.lotes = [createInitialLote(f)];
+    created = true;
+    return f;
+  });
+  if(filamentos === state.filamentos){
+    state.filamentos = migrated;
+    syncStoreState();
+    if(created && window.AutoSave) window.AutoSave.schedule();
+  }
+  console.log('Lotes: migração concluída');
+  return migrated;
+}
+
+function getLoteAtivo(filamento){
+  if(!filamento || !Array.isArray(filamento.lotes)) return null;
+  return filamento.lotes.find(l=>l && l.ativo && !l.arquivado) ||
+    filamento.lotes.find(l=>l && !l.arquivado) ||
+    filamento.lotes[0] ||
+    null;
+}
+
+function getPrecoKgFilamento(filamento){
+  const lote = getLoteAtivo(filamento);
+  const precoKg = lote ? parseFloat(lote.precoKg) : NaN;
+  return !isNaN(precoKg) && precoKg>0 ? precoKg : getLegacyPrecoKgFilamento(filamento);
+}
+
+function nextLoteId(lotes){
+  const max = (lotes || []).reduce((n,l)=>{
+    const m = String(l?.id || '').match(/^L(\d+)$/);
+    return m ? Math.max(n, parseInt(m[1],10)) : n;
+  }, 0);
+  return 'L' + String(max + 1).padStart(3,'0');
+}
+
+function touchFilamentos(){
+  syncStoreState();
+  if(window.AutoSave) window.AutoSave.schedule();
+}
+
+function syncStoreState(){
+  window.state = state;
+  if(window.Store) window.Store.set(state);
+}
+
+function addLoteFilamento(filamentoId, lote){
+  const filamento = state.filamentos.find(f=>f.id===filamentoId);
+  if(!filamento) return null;
+  filamento.lotes = Array.isArray(filamento.lotes) ? filamento.lotes : [];
+  const rec = {
+    id:lote?.id || nextLoteId(filamento.lotes),
+    nome:lote?.nome || 'Novo lote',
+    data:lote?.data || todayISO(),
+    fornecedor:lote?.fornecedor || '',
+    precoKg:parseFloat(lote?.precoKg)||0,
+    ativo:lote?.ativo ?? true,
+    arquivado:lote?.arquivado ?? false,
+    criadoEm:lote?.criadoEm || new Date().toISOString()
+  };
+  if(rec.ativo) filamento.lotes.forEach(l=>{ l.ativo = false; });
+  filamento.lotes.push(rec);
+  touchFilamentos();
+  return rec;
+}
+
+function updateLoteFilamento(filamentoId, loteId, patch){
+  const filamento = state.filamentos.find(f=>f.id===filamentoId);
+  if(!filamento || !Array.isArray(filamento.lotes)) return null;
+  const lote = filamento.lotes.find(l=>l.id===loteId);
+  if(!lote) return null;
+  if(patch?.ativo) filamento.lotes.forEach(l=>{ if(l.id!==loteId) l.ativo = false; });
+  Object.assign(lote, patch || {});
+  touchFilamentos();
+  return lote;
+}
+
+function archiveLoteFilamento(filamentoId, loteId){
+  return updateLoteFilamento(filamentoId, loteId, {ativo:false, arquivado:true});
+}
+
+function getPrecoKg(f){ return getPrecoKgFilamento(f); }
 
 // materiais: array of {marca,cor,gramas,precoKg} - one print job can use several filaments/colors
 function calcBreakdown({materiais,horas,addons,taxaFalhas,margemLucro}){
@@ -831,7 +952,10 @@ async function saveFilModal(){
     const idx = state.filamentos.findIndex(x=>x.id===m.id);
     state.filamentos[idx] = {...state.filamentos[idx], ...rec};
   }else{
-    state.filamentos.push({id:uid(), ...rec});
+    const novo = {id:uid(), ...rec, lotes:[]};
+    const initialLote = createInitialLote(novo);
+    if(initialLote) novo.lotes.push(initialLote);
+    state.filamentos.push(novo);
   }
   if (window.AutoSave) window.AutoSave.schedule();
   await saveFilamentos();
@@ -1180,6 +1304,7 @@ async function setupJoinWorkspace(){
 function confirmEnterAfterCreate(){ enterApp(); }
 
 function enterApp(){
+  migrateFilamentosToLotes();
   document.getElementById('setupScreen').style.display = 'none';
   document.getElementById('app').style.display = 'flex';
   render();
@@ -1213,6 +1338,7 @@ function copyWorkspaceLink(){
    MAIN RENDER
 --------------------------------------------------------------- */
 function render(){
+  migrateFilamentosToLotes();
   renderSidebar();
   const page = document.getElementById('pageContent');
   if(state.view==='calc') page.innerHTML = renderCalc();
@@ -1239,8 +1365,19 @@ function render(){
   const appSrc = document.currentScript.src;
   const format = await import(new URL('core/format.js', appSrc).href);
   Object.assign(window, format);
+  window.migrateFilamentosToLotes = migrateFilamentosToLotes;
+  window.getLoteAtivo = getLoteAtivo;
+  window.getPrecoKgFilamento = getPrecoKgFilamento;
+  Object.assign(window, {
+    migrateFilamentosToLotes,
+    getLoteAtivo,
+    getPrecoKgFilamento,
+    addLoteFilamento,
+    updateLoteFilamento,
+    archiveLoteFilamento
+  });
   const store = await import(new URL('core/store.js', appSrc).href);
-  store.Store.set(state);
+  syncStoreState();
   const autosave = await import(new URL('services/autosave.js', appSrc).href);
   autosave.AutoSave.init({
     save: pushPayload,
@@ -1248,6 +1385,7 @@ function render(){
   });
 
   const ready = await loadAll();
+  migrateFilamentosToLotes();
   document.getElementById('loadingScreen').style.display = 'none';
   if(!ready){
     showSetupScreen();
