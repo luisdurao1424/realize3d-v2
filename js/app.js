@@ -378,7 +378,10 @@ function updateLoteFilamento(filamentoId, loteId, patch){
 }
 
 function archiveLoteFilamento(filamentoId, loteId){
-  return updateLoteFilamento(filamentoId, loteId, {ativo:false, arquivado:true});
+  const lote = updateLoteFilamento(filamentoId, loteId, {ativo:false, arquivado:true});
+  if(lote && state.modal?.type==='lotes') openLotesModal(filamentoId);
+  if(lote) toast('Lote arquivado');
+  return lote;
 }
 
 function getPrecoKg(f){ return getPrecoKgFilamento(f); }
@@ -897,23 +900,29 @@ function renderFil(){
       ${list.length===0 ? `<div class="empty-state">${ICONS.fil}<p>Ainda não tens filamentos registados.</p></div>` : `
       <table>
         <thead><tr>
-          <th>Marca</th><th>Cor</th><th class="num">Preço bobina</th><th class="num">Tamanho</th><th class="num">€/kg</th><th class="num">Nozzle</th><th class="num">Bed</th><th></th>
+          <th>Marca</th><th>Tipo</th><th>Cor</th><th>Lote ativo</th><th>Fornecedor</th><th>Data</th><th class="num">€/kg</th><th class="num">Preço bobina</th><th class="num">Tamanho</th><th></th>
         </tr></thead>
         <tbody>
-          ${list.map(f=>`
+          ${list.map(f=>{
+            const lote = getLoteAtivo(f);
+            return `
             <tr>
               <td>${escapeHtml(f.marca)}</td>
+              <td class="muted">${escapeHtml(f.tipo || f.material || '—')}</td>
               <td><span style="display:inline-flex;align-items:center;gap:7px;"><span style="width:9px;height:9px;border-radius:50%;background:${colorSwatch(f.cor)};display:inline-block;border:1px solid var(--border);"></span>${escapeHtml(f.cor)}</span></td>
+              <td>${escapeHtml(lote?.nome || '—')}</td>
+              <td class="muted">${escapeHtml(lote?.fornecedor || '—')}</td>
+              <td class="muted">${lote?.data ? fmtDate(lote.data) : '—'}</td>
+              <td class="num mono" style="color:var(--accent);font-weight:600;">${fmtEUR(getPrecoKgFilamento(f))}</td>
               <td class="num">${fmtEUR(f.preco)}</td>
               <td class="num">${fmtNum(f.spool,2)} kg</td>
-              <td class="num mono" style="color:var(--accent);font-weight:600;">${fmtEUR(getPrecoKg(f))}</td>
-              <td class="num muted">${f.nozzle?f.nozzle+'°C':'—'}</td>
-              <td class="num muted">${f.bed?f.bed+'°C':'—'}</td>
               <td><div class="row-actions">
+                <button class="icon-btn" title="Lotes" onclick="openLotesModal('${f.id}')">${ICONS.box}</button>
                 <button class="icon-btn" onclick="openFilModal('${f.id}')">${ICONS.edit}</button>
                 <button class="icon-btn danger" onclick="confirmDeleteFil('${f.id}')">${ICONS.trash}</button>
               </div></td>
-            </tr>`).join('')}
+            </tr>`;
+          }).join('')}
         </tbody>
       </table>`}
     </div>
@@ -933,9 +942,9 @@ function colorSwatch(name){
 function openFilModal(id){
   if(id){
     const f = state.filamentos.find(x=>x.id===id);
-    state.modal = {type:'fil', id, form:{marca:f.marca,cor:f.cor,preco:f.preco,spool:f.spool,density:f.density||'',nozzle:f.nozzle||'',bed:f.bed||''}};
+    state.modal = {type:'fil', id, form:{marca:f.marca,tipo:f.tipo||f.material||'',cor:f.cor,preco:f.preco,spool:f.spool,density:f.density||'',nozzle:f.nozzle||'',bed:f.bed||''}};
   }else{
-    state.modal = {type:'fil', id:null, form:{marca:'',cor:'',preco:'',spool:1,density:'',nozzle:'',bed:''}};
+    state.modal = {type:'fil', id:null, form:{marca:'',tipo:'',cor:'',preco:'',spool:1,density:'',nozzle:'',bed:''}};
   }
   render();
 }
@@ -945,7 +954,7 @@ async function saveFilModal(){
   if(!f.preco || parseFloat(f.preco)<=0){ toast('Indica o preço da bobina'); return; }
   const spool = parseFloat(f.spool)||1;
   const rec = {
-    marca:f.marca.trim(), cor:f.cor.trim(), preco:parseFloat(f.preco), spool,
+    marca:f.marca.trim(), tipo:(f.tipo||'').trim(), cor:f.cor.trim(), preco:parseFloat(f.preco), spool,
     density:f.density?parseFloat(f.density):null, nozzle:f.nozzle?parseFloat(f.nozzle):null, bed:f.bed?parseFloat(f.bed):null
   };
   if(m.id){
@@ -962,6 +971,75 @@ async function saveFilModal(){
   closeModal();
   toast('Filamento guardado');
 }
+
+function loteFormDefaults(){
+  return {nome:'', data:todayISO(), fornecedor:'', precoKg:'', ativo:true};
+}
+
+function openLotesModal(filamentoId){
+  const filamento = state.filamentos.find(f=>f.id===filamentoId);
+  if(!filamento) return;
+  migrateFilamentosToLotes();
+  const lotesForm = {};
+  (filamento.lotes || []).forEach(l=>{
+    lotesForm[l.id] = {
+      nome:l.nome || '',
+      data:l.data || '',
+      fornecedor:l.fornecedor || '',
+      precoKg:l.precoKg ?? '',
+      ativo:!!l.ativo
+    };
+  });
+  state.modal = {type:'lotes', filamentoId, form:loteFormDefaults(), lotesForm};
+  render();
+}
+
+function saveLoteFilamento(){
+  const m = state.modal;
+  if(!m || m.type!=='lotes') return;
+  const f = m.form;
+  const precoKg = parseFloat(f.precoKg);
+  if(!f.nome || !f.nome.trim()){ toast('Indica o nome do lote'); return; }
+  if(isNaN(precoKg) || precoKg<0){ toast('Indica um preço €/kg válido'); return; }
+  const lote = addLoteFilamento(m.filamentoId, {
+    nome:f.nome.trim(),
+    data:f.data || todayISO(),
+    fornecedor:(f.fornecedor||'').trim(),
+    precoKg,
+    ativo:!!f.ativo,
+    arquivado:false
+  });
+  if(!lote) return;
+  toast('Lote criado');
+  openLotesModal(m.filamentoId);
+}
+
+function saveExistingLoteFilamento(filamentoId, loteId){
+  const m = state.modal;
+  if(!m || !m.lotesForm || !m.lotesForm[loteId]) return;
+  const f = m.lotesForm[loteId];
+  const precoKg = parseFloat(f.precoKg);
+  if(!f.nome || !f.nome.trim()){ toast('Indica o nome do lote'); return; }
+  if(isNaN(precoKg) || precoKg<0){ toast('Indica um preço €/kg válido'); return; }
+  const lote = updateLoteFilamento(filamentoId, loteId, {
+    nome:f.nome.trim(),
+    data:f.data || '',
+    fornecedor:(f.fornecedor||'').trim(),
+    precoKg,
+    ativo:!!f.ativo
+  });
+  if(!lote) return;
+  toast('Lote guardado');
+  openLotesModal(filamentoId);
+}
+
+function setLoteAtivo(filamentoId, loteId){
+  const lote = updateLoteFilamento(filamentoId, loteId, {ativo:true, arquivado:false});
+  if(!lote) return;
+  toast('Lote ativo atualizado');
+  openLotesModal(filamentoId);
+}
+
 function confirmDeleteFil(id){
   const f = state.filamentos.find(x=>x.id===id);
   state.modal = {type:'deleteFil', id, nome:f.marca+' — '+f.cor};
@@ -1093,11 +1171,72 @@ function closeModal(){ state.modal=null; render(); }
 function renderModal(){
   const m = state.modal;
   if(!m) return '';
+  if(m.type==='lotes'){
+    const filamento = state.filamentos.find(f=>f.id===m.filamentoId);
+    if(!filamento) return '';
+    migrateFilamentosToLotes();
+    const lotes = filamento.lotes || [];
+    const lotesHtml = lotes.length ? lotes.map(l=>{
+      const lf = m.lotesForm?.[l.id] || {nome:l.nome||'',data:l.data||'',fornecedor:l.fornecedor||'',precoKg:l.precoKg ?? '',ativo:!!l.ativo};
+      const estado = l.arquivado ? 'Arquivado' : (l.ativo ? 'Ativo' : 'Inativo');
+      const badgeCls = l.arquivado ? 'badge-orc' : (l.ativo ? 'badge-vend' : 'badge-orc');
+      return `
+        <div style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px;">
+          <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:10px;">
+            <span class="badge ${badgeCls}">${estado}</span>
+            <div class="row-actions">
+              ${!l.ativo && !l.arquivado ? `<button class="btn btn-ghost btn-sm" onclick="setLoteAtivo('${filamento.id}','${l.id}')">Ativar</button>` : ''}
+              ${!l.arquivado ? `<button class="btn btn-danger btn-sm" onclick="archiveLoteFilamento('${filamento.id}','${l.id}')">Arquivar</button>` : ''}
+            </div>
+          </div>
+          <div class="row2">
+            <div class="field"><label>Nome</label><input type="text" value="${escapeHtml(lf.nome)}" oninput="state.modal.lotesForm['${l.id}'].nome=this.value"></div>
+            <div class="field"><label>Data</label><input type="date" value="${escapeHtml(lf.data)}" oninput="state.modal.lotesForm['${l.id}'].data=this.value"></div>
+          </div>
+          <div class="row2">
+            <div class="field"><label>Fornecedor</label><input type="text" value="${escapeHtml(lf.fornecedor)}" oninput="state.modal.lotesForm['${l.id}'].fornecedor=this.value"></div>
+            <div class="field"><label>Preço €/kg</label><div class="unit-input"><input type="number" step="any" min="0" value="${escapeHtml(lf.precoKg)}" oninput="state.modal.lotesForm['${l.id}'].precoKg=this.value"><span>€/kg</span></div></div>
+          </div>
+          <label style="display:flex;align-items:center;gap:8px;margin-bottom:0;">
+            <input type="checkbox" ${lf.ativo?'checked':''} onchange="state.modal.lotesForm['${l.id}'].ativo=this.checked"> Ativo
+          </label>
+          <div class="modal-actions" style="margin-top:10px;">
+            <button class="btn btn-ghost btn-sm" onclick="saveExistingLoteFilamento('${filamento.id}','${l.id}')">Guardar lote</button>
+          </div>
+        </div>
+      `;
+    }).join('') : `<div class="empty-state" style="padding:24px 10px;">${ICONS.box}<p>Sem lotes registados.</p></div>`;
+    const f = m.form;
+    return modalWrap('Lotes do filamento', `
+      <p style="color:var(--text-dim);font-size:13.5px;margin-top:0;line-height:1.5;">
+        <b>${escapeHtml(filamento.marca)} — ${escapeHtml(filamento.cor)}</b>
+      </p>
+      ${lotesHtml}
+      <div style="border-top:1px solid var(--border-soft);padding-top:14px;margin-top:14px;">
+        <h3 style="font-size:14px;margin-bottom:12px;">+ Novo lote</h3>
+        <div class="row2">
+          <div class="field"><label>Nome</label><input type="text" value="${escapeHtml(f.nome)}" oninput="state.modal.form.nome=this.value" placeholder="ex: Lote 2"></div>
+          <div class="field"><label>Data</label><input type="date" value="${escapeHtml(f.data)}" oninput="state.modal.form.data=this.value"></div>
+        </div>
+        <div class="row2">
+          <div class="field"><label>Fornecedor</label><input type="text" value="${escapeHtml(f.fornecedor)}" oninput="state.modal.form.fornecedor=this.value" placeholder="ex: Loja / fornecedor"></div>
+          <div class="field"><label>Preço €/kg</label><div class="unit-input"><input type="number" step="any" min="0" value="${escapeHtml(f.precoKg)}" oninput="state.modal.form.precoKg=this.value"><span>€/kg</span></div></div>
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;margin-bottom:0;">
+          <input type="checkbox" ${f.ativo?'checked':''} onchange="state.modal.form.ativo=this.checked"> Ativo
+        </label>
+      </div>
+    `, [
+      {label:'Fechar', cls:'btn-ghost', action:'closeModal()'},
+      {label:'+ Novo lote', cls:'btn-accent', action:'saveLoteFilamento()'}
+    ]);
+  }
   if(m.type==='fil'){
     const f = m.form;
     return modalWrap(`${m.id?'Editar':'Novo'} filamento`, `
-      <div class="row2">
+      <div class="row3">
         <div class="field"><label>Marca</label><input type="text" value="${escapeHtml(f.marca)}" oninput="state.modal.form.marca=this.value" placeholder="ex: Elegoo"></div>
+        <div class="field"><label>Tipo de filamento</label><input type="text" value="${escapeHtml(f.tipo)}" oninput="state.modal.form.tipo=this.value" placeholder="ex: PLA Matte"></div>
         <div class="field"><label>Cor</label><input type="text" value="${escapeHtml(f.cor)}" oninput="state.modal.form.cor=this.value" placeholder="ex: Branco"></div>
       </div>
       <div class="row2">
@@ -1372,6 +1511,9 @@ function render(){
     migrateFilamentosToLotes,
     getLoteAtivo,
     getPrecoKgFilamento,
+    openLotesModal,
+    saveLoteFilamento,
+    setLoteAtivo,
     addLoteFilamento,
     updateLoteFilamento,
     archiveLoteFilamento
