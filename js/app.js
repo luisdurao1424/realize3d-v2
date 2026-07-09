@@ -322,10 +322,39 @@ function getLoteAtivo(filamento){
     null;
 }
 
+function getLoteAtivoCalculo(filamento){
+  if(!filamento || !Array.isArray(filamento.lotes)) return null;
+  return filamento.lotes.find(l=>l && l.ativo && !l.arquivado) || null;
+}
+
 function getPrecoKgFilamento(filamento){
-  const lote = getLoteAtivo(filamento);
+  const lote = getLoteAtivoCalculo(filamento);
   const precoKg = lote ? parseFloat(lote.precoKg) : NaN;
-  return !isNaN(precoKg) && precoKg>0 ? precoKg : getLegacyPrecoKgFilamento(filamento);
+  if(!isNaN(precoKg) && precoKg>0){
+    calcLog('Calc: usando lote ativo');
+    return precoKg;
+  }
+  calcLog('Calc: usando preço antigo fallback');
+  return getLegacyPrecoKgFilamento(filamento);
+}
+
+function calcLog(msg){
+  const host = window.location.hostname;
+  const isDev = !host || host === 'localhost' || host === '127.0.0.1';
+  if(isDev) console.log(msg);
+}
+
+function getLoteSnapshot(filamento){
+  const lote = getLoteAtivoCalculo(filamento);
+  if(!filamento || !lote) return null;
+  return {
+    filamentoId: filamento.id || null,
+    loteId: lote.id || null,
+    loteNome: lote.nome || '',
+    lotePrecoKg: parseFloat(lote.precoKg)||0,
+    loteFornecedor: lote.fornecedor || '',
+    loteData: lote.data || ''
+  };
 }
 
 function nextLoteId(lotes){
@@ -525,9 +554,11 @@ function resolveMateriais(materiais){
     const fil = state.filamentos.find(f=>filKey(f.marca,f.cor)===m.filKey);
     return {
       id:m.id, filKey:m.filKey,
+      filamentoId: fil?fil.id:null,
       marca: fil?fil.marca:null, cor: fil?fil.cor:null,
       gramas: parseFloat(m.gramas)||0,
-      precoKg: fil?getPrecoKg(fil):0
+      precoKg: fil?getPrecoKg(fil):0,
+      loteSnapshot: fil?getLoteSnapshot(fil):null
     };
   });
 }
@@ -640,7 +671,13 @@ async function saveCalcToHistory(){
   const b = calcBreakdown({materiais:validMateriais,horas,addons,taxaFalhas,margemLucro});
   const pedido = {
     id:uid(), projeto:c.projeto.trim(),
-    materiais: validMateriais.map(m=>({marca:m.marca,cor:m.cor,gramas:m.gramas,precoKg:m.precoKg})),
+    materiais: validMateriais.map(m=>({
+      marca:m.marca,
+      cor:m.cor,
+      gramas:m.gramas,
+      precoKg:m.precoKg,
+      loteSnapshot:m.loteSnapshot
+    })),
     horas:parseFloat(horas)||0, addons:parseFloat(addons)||0,
     taxaFalhas, margemLucro,
     custoFilamento:b.custoFilamento, custoEletricidade:b.custoEletricidade, custoFinal:b.custoFinal,
@@ -867,7 +904,13 @@ async function saveEditPedido(){
   const resolved = resolveMateriais(f.materiais).filter(m=>m.marca && m.gramas>0);
   if(resolved.length===0){ toast('Escolhe pelo menos um filamento e indica as gramas'); return; }
   p.projeto = f.projeto.trim();
-  p.materiais = resolved.map(m=>({marca:m.marca,cor:m.cor,gramas:m.gramas,precoKg:m.precoKg}));
+  p.materiais = resolved.map(m=>({
+    marca:m.marca,
+    cor:m.cor,
+    gramas:m.gramas,
+    precoKg:m.precoKg,
+    loteSnapshot:m.loteSnapshot
+  }));
   p.horas = parseFloat(f.horas)||0;
   p.addons = parseFloat(f.addons)||0;
   p.data = f.data || null;
