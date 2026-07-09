@@ -439,6 +439,57 @@ function getPedidoCostValues(p){
   };
 }
 
+function getPedidoSnapshotMateriais(p){
+  const snap = p?.costSnapshot;
+  if(!snap) return [];
+  if(Array.isArray(snap.materiais) && snap.materiais.length>0) return snap.materiais;
+  return [{
+    marca:(p.materiais||[])[0]?.marca || '',
+    cor:(p.materiais||[])[0]?.cor || '',
+    loteNome:snap.loteNome || '',
+    lotePrecoKg:snap.lotePrecoKg,
+    loteFornecedor:snap.loteFornecedor || '',
+    loteData:snap.loteData || '',
+    gramas:snap.gramas,
+    custoFilamento:snap.custoFilamento
+  }];
+}
+
+function pedidoLoteSummaryHtml(p){
+  if(!p?.costSnapshot) return `<div class="muted" style="font-size:11px;margin-top:4px;">Lote: não registado</div>`;
+  const mats = getPedidoSnapshotMateriais(p);
+  if(mats.length===0) return `<div class="muted" style="font-size:11px;margin-top:4px;">Lote: não registado</div>`;
+  return `<div class="muted" style="font-size:11px;margin-top:4px;line-height:1.35;">${mats.map(m=>{
+    const nome = m.loteNome || 'Lote sem nome';
+    const preco = m.lotePrecoKg!=null ? fmtEUR(m.lotePrecoKg) + '/kg' : 'preço n/d';
+    const fil = [m.marca, m.cor].filter(Boolean).join(' · ');
+    const detalhe = mats.length>1 && fil ? `${escapeHtml(fil)}: ` : 'Lote: ';
+    const grams = m.gramas!=null ? ` · ${fmtNum(m.gramas)}g` : '';
+    const custo = m.custoFilamento!=null ? ` · ${fmtEUR(m.custoFilamento)}` : '';
+    return `${detalhe}${escapeHtml(nome)} · ${preco}${grams}${custo}`;
+  }).join('<br>')}</div>`;
+}
+
+function pedidoLoteDetailHtml(p){
+  if(!p?.costSnapshot) return `<div class="hint">Lote: não registado</div>`;
+  const mats = getPedidoSnapshotMateriais(p);
+  const costs = getPedidoCostValues(p);
+  return `<div class="field">
+    <label>Lote usado</label>
+    <div class="hint" style="line-height:1.45;">
+      ${mats.map(m=>{
+        const fil = [m.marca, m.cor].filter(Boolean).join(' · ');
+        const nome = m.loteNome || 'Lote sem nome';
+        const fornecedor = m.loteFornecedor || 'n/d';
+        const data = m.loteData ? fmtDate(m.loteData) : 'n/d';
+        const preco = m.lotePrecoKg!=null ? fmtEUR(m.lotePrecoKg) + '/kg' : 'Preço n/d';
+        const custo = m.custoFilamento!=null ? fmtEUR(m.custoFilamento) : fmtEUR(costs.custoFilamento);
+        return `${fil ? escapeHtml(fil) + '<br>' : ''}Lote: ${escapeHtml(nome)}<br>Fornecedor: ${escapeHtml(fornecedor)} · Data: ${data}<br>Preço usado: ${preco} · Custo do filamento: ${custo}`;
+      }).join('<br><br>')}
+    </div>
+  </div>`;
+}
+
 function sameCostInputs(p, form){
   const prev = (p.materiais||[]).map(m=>({
     filKey:filKey(m.marca,m.cor),
@@ -897,7 +948,7 @@ function renderHistTable(){
           const lucro = p.recebido!==null ? (p.recebido - costs.custoFinal) : null;
           return `<tr>
             <td>${escapeHtml(p.projeto)}${p.data?`<div class="muted" style="font-size:11px;">${fmtDate(p.data)}</div>`:''}</td>
-            <td class="muted">${(p.materiais||[]).map(m=>escapeHtml(m.marca)+' · '+escapeHtml(m.cor)).join('<br>')}</td>
+            <td class="muted">${(p.materiais||[]).map(m=>escapeHtml(m.marca)+' · '+escapeHtml(m.cor)).join('<br>')}${pedidoLoteSummaryHtml(p)}</td>
             <td class="num">${fmtNum((p.materiais||[]).reduce((s,m)=>s+(m.gramas||0),0))}g</td>
             <td class="num">${fmtNum(p.horas)}h</td>
             <td class="num">${fmtEUR(costs.custoFinal)}</td>
@@ -1488,6 +1539,7 @@ function renderModal(){
   }
   if(m.type==='editPedido'){
     const f = m.form;
+    const pedido = state.pedidos.find(p=>p.id===m.id);
     return modalWrap('Editar registo', `
       <div class="field"><label>Projeto</label><input type="text" value="${escapeHtml(f.projeto)}" oninput="state.modal.form.projeto=this.value"></div>
       <div class="field">
@@ -1495,6 +1547,7 @@ function renderModal(){
         ${f.materiais.map(m=>materialRowHtml(m,'modal',f.materiais.length>1)).join('')}
         <button type="button" class="btn btn-ghost btn-sm" onclick="modalAddMaterial()">${ICONS.plus} Adicionar filamento</button>
       </div>
+      ${pedidoLoteDetailHtml(pedido)}
       <div class="field"><label>Tempo (total)</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.horas}" oninput="state.modal.form.horas=this.value"><span>h</span></div></div>
       <div class="row2">
         <div class="field"><label>Add-ons</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.addons}" oninput="state.modal.form.addons=this.value"><span>€</span></div></div>
