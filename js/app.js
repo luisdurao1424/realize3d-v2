@@ -278,6 +278,7 @@ function getLegacyPrecoKgFilamento(f){
 
 function createInitialLote(f){
   const precoKg = getLegacyPrecoKgFilamento(f);
+  if(!precoKg || precoKg<=0) return null;
   console.log('Lotes: lote inicial criado');
   return {
     id:'L001',
@@ -301,8 +302,9 @@ function migrateFilamentosToLotes(filamentos = state.filamentos){
   const migrated = filamentos.map(f=>{
     if(!f) return f;
     if(Array.isArray(f.lotes) && f.lotes.length>0) return f;
-    f.lotes = [createInitialLote(f)];
-    created = true;
+    const initialLote = createInitialLote(f);
+    f.lotes = initialLote ? [initialLote] : [];
+    if(initialLote) created = true;
     return f;
   });
   if(filamentos === state.filamentos){
@@ -568,7 +570,10 @@ function updateLoteFilamento(filamentoId, loteId, patch){
   if(!filamento || !Array.isArray(filamento.lotes)) return null;
   const lote = filamento.lotes.find(l=>l.id===loteId);
   if(!lote) return null;
-  if(patch?.ativo) filamento.lotes.forEach(l=>{ if(l.id!==loteId) l.ativo = false; });
+  if(patch?.ativo){
+    patch.arquivado = false;
+    filamento.lotes.forEach(l=>{ if(l.id!==loteId) l.ativo = false; });
+  }
   Object.assign(lote, patch || {});
   touchFilamentos();
   return lote;
@@ -1152,7 +1157,7 @@ function renderFil(){
         </tr></thead>
         <tbody>
           ${list.map(f=>{
-            const lote = getLoteAtivo(f);
+            const lote = getLoteAtivoCalculo(f);
             return `
             <tr>
               <td>${escapeHtml(f.marca)}</td>
@@ -1162,7 +1167,7 @@ function renderFil(){
               <td class="muted">${escapeHtml(lote?.fornecedor || '—')}</td>
               <td class="muted">${lote?.data ? fmtDate(lote.data) : '—'}</td>
               <td class="num mono" style="color:var(--accent);font-weight:600;">${fmtEUR(getPrecoKgFilamento(f))}</td>
-              <td class="num">${fmtEUR(f.preco)}</td>
+              <td class="num">${f.preco ? fmtEUR(f.preco) : '—'}</td>
               <td class="num">${fmtNum(f.spool,2)} kg</td>
               <td><div class="row-actions">
                 <button class="icon-btn" title="Lotes" onclick="openLotesModal('${f.id}')">${ICONS.box}</button>
@@ -1192,26 +1197,38 @@ function openFilModal(id){
     const f = state.filamentos.find(x=>x.id===id);
     state.modal = {type:'fil', id, form:{marca:f.marca,tipo:f.tipo||f.material||'',cor:f.cor,preco:f.preco,spool:f.spool,density:f.density||'',nozzle:f.nozzle||'',bed:f.bed||''}};
   }else{
-    state.modal = {type:'fil', id:null, form:{marca:'',tipo:'',cor:'',preco:'',spool:1,density:'',nozzle:'',bed:''}};
+    state.modal = {type:'fil', id:null, form:{marca:'',tipo:'',cor:'',preco:'',spool:1,density:'',nozzle:'',bed:'',loteNome:'Lote inicial',loteData:todayISO(),loteFornecedor:'',lotePrecoKg:''}};
   }
   render();
 }
 async function saveFilModal(){
   const m = state.modal, f = m.form;
   if(!f.marca.trim() || !f.cor.trim()){ toast('Indica marca e cor'); return; }
-  if(!f.preco || parseFloat(f.preco)<=0){ toast('Indica o preço da bobina'); return; }
   const spool = parseFloat(f.spool)||1;
+  const lotePrecoKg = parseFloat(f.lotePrecoKg);
+  if(!m.id && f.lotePrecoKg!=='' && (isNaN(lotePrecoKg) || lotePrecoKg<0)){ toast('Indica um preço €/kg válido'); return; }
   const rec = {
-    marca:f.marca.trim(), tipo:(f.tipo||'').trim(), cor:f.cor.trim(), preco:parseFloat(f.preco), spool,
+    marca:f.marca.trim(), tipo:(f.tipo||'').trim(), cor:f.cor.trim(), spool,
     density:f.density?parseFloat(f.density):null, nozzle:f.nozzle?parseFloat(f.nozzle):null, bed:f.bed?parseFloat(f.bed):null
   };
+  if(m.id) rec.preco = parseFloat(f.preco)||0;
   if(m.id){
     const idx = state.filamentos.findIndex(x=>x.id===m.id);
     state.filamentos[idx] = {...state.filamentos[idx], ...rec};
   }else{
     const novo = {id:uid(), ...rec, lotes:[]};
-    const initialLote = createInitialLote(novo);
-    if(initialLote) novo.lotes.push(initialLote);
+    if(f.lotePrecoKg!==''){
+      novo.lotes.push({
+        id:'L001',
+        nome:(f.loteNome||'Lote inicial').trim(),
+        data:f.loteData || todayISO(),
+        fornecedor:(f.loteFornecedor||'').trim(),
+        precoKg:lotePrecoKg,
+        ativo:true,
+        arquivado:false,
+        criadoEm:new Date().toISOString()
+      });
+    }
     state.filamentos.push(novo);
   }
   if (window.AutoSave) window.AutoSave.schedule();
@@ -1481,21 +1498,31 @@ function renderModal(){
   }
   if(m.type==='fil'){
     const f = m.form;
+    const loteInicialHtml = m.id ? '' : `
+      <div style="border-top:1px solid var(--border-soft);padding-top:14px;margin-top:14px;">
+        <h3 style="font-size:14px;margin-bottom:12px;">Lote inicial</h3>
+        <div class="row2">
+          <div class="field"><label>Nome do lote</label><input type="text" value="${escapeHtml(f.loteNome)}" oninput="state.modal.form.loteNome=this.value" placeholder="ex: Lote inicial"></div>
+          <div class="field"><label>Data</label><input type="date" value="${escapeHtml(f.loteData)}" oninput="state.modal.form.loteData=this.value"></div>
+        </div>
+        <div class="row2">
+          <div class="field"><label>Fornecedor</label><input type="text" value="${escapeHtml(f.loteFornecedor)}" oninput="state.modal.form.loteFornecedor=this.value" placeholder="ex: Loja / fornecedor"></div>
+          <div class="field"><label>Preço €/kg</label><div class="unit-input"><input type="number" step="any" min="0" value="${escapeHtml(f.lotePrecoKg)}" oninput="state.modal.form.lotePrecoKg=this.value" placeholder="0"><span>€/kg</span></div></div>
+        </div>
+      </div>`;
     return modalWrap(`${m.id?'Editar':'Novo'} filamento`, `
       <div class="row3">
         <div class="field"><label>Marca</label><input type="text" value="${escapeHtml(f.marca)}" oninput="state.modal.form.marca=this.value" placeholder="ex: Elegoo"></div>
         <div class="field"><label>Tipo de filamento</label><input type="text" value="${escapeHtml(f.tipo)}" oninput="state.modal.form.tipo=this.value" placeholder="ex: PLA Matte"></div>
         <div class="field"><label>Cor</label><input type="text" value="${escapeHtml(f.cor)}" oninput="state.modal.form.cor=this.value" placeholder="ex: Branco"></div>
       </div>
-      <div class="row2">
-        <div class="field"><label>Preço da bobina</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.preco}" oninput="state.modal.form.preco=this.value"><span>€</span></div></div>
-        <div class="field"><label>Tamanho da bobina</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.spool}" oninput="state.modal.form.spool=this.value"><span>kg</span></div></div>
-      </div>
+      <div class="field"><label>Tamanho da bobina</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.spool}" oninput="state.modal.form.spool=this.value"><span>kg</span></div></div>
       <div class="row3">
         <div class="field"><label>Densidade</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.density}" oninput="state.modal.form.density=this.value"><span>g/cm³</span></div></div>
         <div class="field"><label>Nozzle</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.nozzle}" oninput="state.modal.form.nozzle=this.value"><span>°C</span></div></div>
         <div class="field"><label>Bed</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.bed}" oninput="state.modal.form.bed=this.value"><span>°C</span></div></div>
       </div>
+      ${loteInicialHtml}
     `, [
       {label:'Cancelar', cls:'btn-ghost', action:'closeModal()'},
       {label:'Guardar', cls:'btn-accent', action:'saveFilModal()'}
