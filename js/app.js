@@ -177,15 +177,11 @@ function currentPayload(){
 // returns true if the app is ready to show; false if the setup screen should be shown instead
 async function loadAll(){
   const urlWorkspace = getUrlWorkspace();
-  const lastWorkspace = getLastWorkspace();
   if(urlWorkspace){
     console.log('Workspace: parâmetro URL encontrado');
     console.log('Workspace: abertura por URL iniciada');
-  }else if(lastWorkspace){
-    console.log('Workspace: último workspace encontrado');
-    console.log('Workspace: auto abertura iniciada');
   }
-  workspaceCode = urlWorkspace || lastWorkspace || lsGet('workspace');
+  workspaceCode = urlWorkspace || lsGet('workspace');
   if(!workspaceCode){
     return false;
   }
@@ -194,9 +190,11 @@ async function loadAll(){
     const cached = lsGet('cache_payload');
     applyPayload(cached ? JSON.parse(cached) : defaultPayload());
     setSyncStatus('offline');
-    setLastWorkspace(workspaceCode);
-    if(urlWorkspace) console.log('Workspace: abertura por URL concluída');
-    else if(lastWorkspace) console.log('Workspace: auto abertura concluída');
+    if(urlWorkspace){
+      lsSet('workspace', workspaceCode);
+      setLastWorkspace(workspaceCode);
+      console.log('Workspace: abertura por URL concluída');
+    }
     return true;
   }
   try{
@@ -206,19 +204,15 @@ async function loadAll(){
     applyPayload(data.payload || {});
     lsSet('cache_payload', JSON.stringify(data.payload || {}));
     setSyncStatus('ok');
-    setLastWorkspace(workspaceCode);
-    if(urlWorkspace) console.log('Workspace: abertura por URL concluída');
-    else if(lastWorkspace) console.log('Workspace: auto abertura concluída');
+    if(urlWorkspace){
+      lsSet('workspace', workspaceCode);
+      setLastWorkspace(workspaceCode);
+      console.log('Workspace: abertura por URL concluída');
+    }
   }catch(e){
     console.error(e);
     if(urlWorkspace){
       console.log('Workspace: abertura por URL falhou');
-      workspaceCode = null;
-      return false;
-    }
-    if(lastWorkspace){
-      console.log('Workspace: auto abertura falhou');
-      clearLastWorkspace();
       workspaceCode = null;
       return false;
     }
