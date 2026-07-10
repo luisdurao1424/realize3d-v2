@@ -938,6 +938,67 @@ function getPedidoPrecoKgLabel(p){
   return costs.lotePrecoKg!=null ? `${fmtEUR(costs.lotePrecoKg)}/kg` : 'n/d';
 }
 
+function getPedidoLoteLabel(p){
+  if(!p?.costSnapshot) return 'Lote não registado';
+  const mats = getPedidoSnapshotMateriais(p).filter(m=>m.loteNome);
+  if(mats.length>1){
+    const nomes = [...new Set(mats.map(m=>m.loteNome).filter(Boolean))];
+    return nomes.length===1 ? nomes[0] : 'vários lotes';
+  }
+  return mats[0]?.loteNome || 'Lote não registado';
+}
+
+function escapeAttr(s){
+  return escapeHtml(s);
+}
+
+function getPedidoMateriaisTooltip(p){
+  const snapMats = getPedidoSnapshotMateriais(p);
+  if(p?.costSnapshot && snapMats.length>0){
+    return snapMats.map(m=>{
+      const fil = [m.marca, m.cor].filter(Boolean).join(' ') || 'Material';
+      const lote = m.loteNome || 'Lote não registado';
+      const preco = m.lotePrecoKg!=null ? `${fmtEUR(m.lotePrecoKg)}/kg` : 'preço n/d';
+      const gramas = m.gramas!=null ? `${fmtNum(m.gramas)} g` : 'gramas n/d';
+      return `${fil} — ${gramas} — ${lote} — ${preco}`;
+    }).join('\n');
+  }
+  const mats = p?.materiais || [];
+  if(mats.length===0) return 'Detalhe não registado';
+  return mats.map(m=>{
+    const fil = [m.marca, m.cor].filter(Boolean).join(' ') || 'Material';
+    const gramas = m.gramas!=null ? `${fmtNum(m.gramas)} g` : 'gramas n/d';
+    const preco = m.precoKg!=null ? `${fmtEUR(m.precoKg)}/kg` : 'preço n/d';
+    return `${fil} — ${gramas} — Lote não registado — ${preco}`;
+  }).join('\n');
+}
+
+function getPedidoCustosTooltip(p){
+  const snap = p?.costSnapshot;
+  const costs = getPedidoCostValues(p);
+  const custoFilamento = snap?.custoFilamento ?? p?.custoFilamento;
+  const eletricidade = snap?.custoEletricidade ?? p?.custoEletricidade;
+  const falhas = snap?.bufferFalhas ?? p?.bufferFalhas;
+  const addons = snap?.addons ?? p?.addons;
+  return [
+    `Filamento: ${custoFilamento!=null ? fmtEUR(custoFilamento) : 'n/d'}`,
+    `Eletricidade: ${eletricidade!=null ? fmtEUR(eletricidade) : 'n/d'}`,
+    `Falhas: ${falhas!=null ? fmtEUR(falhas) : 'n/d'}`,
+    `Addons: ${addons!=null ? fmtEUR(addons) : 'n/d'}`,
+    `Total: ${fmtEUR(costs.custoFinal)}`
+  ].join('\n');
+}
+
+function fmtTempoHoras(horas){
+  const n = parseFloat(horas);
+  if(isNaN(n) || n<=0) return '—';
+  const h = Math.floor(n);
+  const m = Math.round((n-h)*60);
+  if(h && m) return `${h} h ${m} min`;
+  if(h) return `${h} h`;
+  return `${m} min`;
+}
+
 function renderPedidoMetric(label, value, cls=''){
   return `<div style="min-width:0;">
     <div class="muted" style="font-size:11px;margin-bottom:3px;">${label}</div>
@@ -1034,7 +1095,10 @@ function renderHistTable(){
     return;
   }
   wrap.innerHTML = `
-    <div style="display:grid;gap:0;">
+    <div class="history-list">
+      <div class="history-header">
+        <span>Nome</span><span>Estado</span><span>Gramas</span><span>Tempo</span><span>Custo total</span><span>Preço venda</span><span>Recebido</span><span>Lucro</span><span>Ações</span>
+      </div>
       ${list.map(p=>{
         const costs = getPedidoCostValues(p);
         const status = getPedidoStatusView(p);
@@ -1042,40 +1106,31 @@ function renderHistTable(){
         const hasRecebido = p.recebido !== null && p.recebido !== undefined;
         const lucro = hasRecebido ? (p.recebido - costs.custoFinal) : null;
         const lucroCls = lucro===null ? '' : (lucro>=0 ? 'pos' : 'neg');
-        const materiais = (p.materiais||[]).map(m=>escapeHtml(m.marca)+' · '+escapeHtml(m.cor)).join('<br>');
-        return `<article style="padding:14px 16px;border-bottom:1px solid var(--border-soft);">
-          <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
-            <div style="min-width:220px;flex:1;">
-              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                <strong style="font-size:14px;">${escapeHtml(p.projeto || 'Pedido sem nome')}</strong>
-                <span class="badge ${status.cls}">${status.label}</span>
-              </div>
-              <div class="muted" style="font-size:11px;margin-top:4px;line-height:1.35;">
-                ${cliente ? `Cliente: ${escapeHtml(cliente)} · ` : ''}${p.data ? fmtDate(p.data) : 'Sem data'}
-                ${materiais ? `<br>${materiais}` : ''}
-              </div>
-              ${pedidoLoteSummaryHtml(p)}
-            </div>
-            <div class="row-actions" style="justify-content:flex-end;">
-              ${showTrash ? `
-                <button class="btn btn-ghost btn-sm" title="Restaurar" onclick="restorePedidoFromTrash('${p.id}')">${ICONS.check} Restaurar</button>
-                <button class="btn btn-danger btn-sm" title="Eliminar definitivamente" onclick="confirmPermanentDeletePedido('${p.id}')">${ICONS.trash} Eliminar definitivamente</button>
-              ` : `
-                ${p.status==='orcamento' ? `<button class="btn btn-ghost btn-sm" title="Marcar vendido" onclick="openVendaModal('${p.id}')">${ICONS.euro} Vender</button>` : ''}
-                <button class="btn btn-ghost btn-sm" title="Duplicar" onclick="openDuplicateModal('${p.id}')">${ICONS.copy} Duplicar</button>
-                <button class="btn btn-ghost btn-sm" title="Editar" onclick="openEditPedidoModal('${p.id}')">${ICONS.edit} Editar</button>
-                <button class="btn btn-danger btn-sm" title="Eliminar" onclick="confirmDeletePedido('${p.id}')">${ICONS.trash} Eliminar</button>
-              `}
-            </div>
+        const data = p.data ? fmtDate(p.data) : 'Sem data';
+        const materiaisTooltip = getPedidoMateriaisTooltip(p);
+        const custosTooltip = getPedidoCustosTooltip(p);
+        return `<article class="history-row">
+          <div class="history-name">
+            <strong>${escapeHtml(p.projeto || 'Pedido sem nome')}</strong>
+            <span>${data}</span>
           </div>
-          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(108px,1fr));gap:12px;margin-top:14px;">
-            ${renderPedidoMetric('Gramas', `${fmtNum(getPedidoGramasTotal(p))}g`)}
-            ${renderPedidoMetric('Tempo', `${fmtNum(p.horas)}h`)}
-            ${renderPedidoMetric('Lote/preço', getPedidoPrecoKgLabel(p))}
-            ${renderPedidoMetric('Custo total', fmtEUR(costs.custoFinal))}
-            ${renderPedidoMetric('Preço de venda', fmtEUR(costs.precoVenda))}
-            ${renderPedidoMetric('Recebido', hasRecebido ? fmtEUR(p.recebido) : '—')}
-            ${renderPedidoMetric('Lucro', lucro===null ? '—' : fmtEUR(lucro), lucroCls)}
+          <div class="history-cell"><span class="history-label">Estado</span><span class="badge ${status.cls}">${status.label}</span></div>
+          <div class="history-cell mono" title="${escapeAttr(materiaisTooltip)}"><span class="history-label">Gramas</span><b>${fmtNum(getPedidoGramasTotal(p))} g</b></div>
+          <div class="history-cell mono"><span class="history-label">Tempo</span><b>${fmtTempoHoras(p.horas)}</b></div>
+          <div class="history-cell mono" title="${escapeAttr(custosTooltip)}"><span class="history-label">Custo</span><b>${fmtEUR(costs.custoFinal)}</b></div>
+          <div class="history-cell mono"><span class="history-label">Venda</span><b>${fmtEUR(costs.precoVenda)}</b></div>
+          <div class="history-cell mono"><span class="history-label">Recebido</span><b>${hasRecebido ? fmtEUR(p.recebido) : '—'}</b></div>
+          <div class="history-cell mono"><span class="history-label">Lucro</span><b class="${lucroCls}">${lucro===null ? '—' : fmtEUR(lucro)}</b></div>
+          <div class="history-actions row-actions">
+            ${showTrash ? `
+              <button class="btn btn-ghost btn-sm" title="Restaurar" onclick="restorePedidoFromTrash('${p.id}')">${ICONS.check} Restaurar</button>
+              <button class="btn btn-danger btn-sm" title="Eliminar definitivamente" onclick="confirmPermanentDeletePedido('${p.id}')">${ICONS.trash} Eliminar definitivamente</button>
+            ` : `
+              ${p.status==='orcamento' ? `<button class="btn btn-ghost btn-sm" title="Marcar vendido" onclick="openVendaModal('${p.id}')">${ICONS.euro} Vender</button>` : ''}
+              <button class="btn btn-ghost btn-sm" title="Duplicar" onclick="openDuplicateModal('${p.id}')">${ICONS.copy} Duplicar</button>
+              <button class="btn btn-ghost btn-sm" title="Editar" onclick="openEditPedidoModal('${p.id}')">${ICONS.edit} Editar</button>
+              <button class="btn btn-danger btn-sm" title="Eliminar" onclick="confirmDeletePedido('${p.id}')">${ICONS.trash} Eliminar</button>
+            `}
           </div>
         </article>`;
       }).join('')}
