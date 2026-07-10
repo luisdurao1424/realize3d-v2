@@ -642,8 +642,9 @@ function renderSidebar(){
       ${ICONS[n.icon]}<span>${n.label}</span>
     </button>`).join('');
 
-  const totalPedidos = state.pedidos.length;
-  const vendidos = state.pedidos.filter(p=>p.status==='vendido').length;
+  const pedidosAtivos = state.pedidos.filter(p=>p.deleted !== true);
+  const totalPedidos = pedidosAtivos.length;
+  const vendidos = pedidosAtivos.filter(p=>p.status==='vendido').length;
   document.getElementById('sidebarFoot').innerHTML = `
     ${syncBadgeHtml()}
     ${workspaceCode ? `<div class="workspace-code-chip" style="margin-bottom:10px;"><span>${escapeHtml(workspaceCode)}</span><button onclick="copyWorkspaceCode()" title="Copiar código">${ICONS.copy}</button><button onclick="copyWorkspaceLink()" title="Copiar link direto">${ICONS.copy}</button></div>` : ''}
@@ -679,38 +680,50 @@ function renderCalc(){
     <div class="grid-2">
       <div class="card layer-tex">
         <h2><span class="dot"></span>Dados da impressão</h2>
-        <div class="field">
-          <label>Nome do projeto</label>
-          <input type="text" id="in_projeto" placeholder="ex: Hogwarts globo" value="${escapeHtml(c.projeto)}" oninput="state.calc.projeto=this.value">
-        </div>
-        <div class="field">
-          <label>Filamentos</label>
-          <div id="materialRows">
-            ${c.materiais.map(m=>materialRowHtml(m,'calc',c.materiais.length>1)).join('')}
-          </div>
-          <button type="button" class="btn btn-ghost btn-sm" onclick="calcAddMaterial()">${ICONS.plus} Adicionar filamento</button>
-          <div class="hint">Impressão multi-material? Adiciona uma linha por cor/filamento usado. Não encontras um filamento? Adiciona-o na aba <a href="#" onclick="switchView('fil');return false;" style="color:var(--accent);">Filamentos</a>.</div>
-        </div>
-        <div class="field">
-          <label>Tempo de impressão (total)</label>
-          <div class="unit-input"><input type="number" min="0" step="any" id="in_horas" placeholder="0" value="${c.horas}" oninput="state.calc.horas=this.value; updateCalcPreview();"><span>h</span></div>
-        </div>
-        <div class="field">
-          <label>Add-ons / extras (ímanes, parafusos, embalagem…)</label>
-          <div class="unit-input"><input type="number" min="0" step="any" id="in_addons" placeholder="0.00" value="${c.addons}" oninput="state.calc.addons=this.value; updateCalcPreview();"><span>€</span></div>
-        </div>
-        <div class="row2">
+        <div class="calc-section">
+          <h3>Materiais</h3>
           <div class="field">
-            <label>Taxa de falhas</label>
-            <div class="unit-input"><input type="number" min="0" step="any" id="in_taxa" placeholder="${fmtNum(taxaDefault)}" value="${c.taxaFalhas===null?'':c.taxaFalhas}" oninput="state.calc.taxaFalhas=this.value; updateCalcPreview();"><span>%</span></div>
-            <div class="hint">Vazio = usa definição global (${fmtNum(taxaDefault)}%)</div>
+            <label>Nome do projeto</label>
+            <input type="text" id="in_projeto" placeholder="ex: Hogwarts globo" value="${escapeHtml(c.projeto)}" oninput="state.calc.projeto=this.value">
           </div>
           <div class="field">
-            <label>Margem de lucro</label>
-            <div class="unit-input"><input type="number" min="0" step="any" id="in_lucro" placeholder="${fmtNum(lucroDefault)}" value="${c.margemLucro===null?'':c.margemLucro}" oninput="state.calc.margemLucro=this.value; updateCalcPreview();"><span>%</span></div>
-            <div class="hint">Vazio = usa definição global (${fmtNum(lucroDefault)}%)</div>
+            <label>Filamentos</label>
+            <div id="materialRows">
+              ${c.materiais.map(m=>materialRowHtml(m,'calc',c.materiais.length>1)).join('')}
+            </div>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="calcAddMaterial()">${ICONS.plus} Adicionar filamento</button>
+            <div class="hint">Impressão multi-material? Adiciona uma linha por cor/filamento usado. Não encontras um filamento? Adiciona-o na aba <a href="#" onclick="switchView('fil');return false;" style="color:var(--accent);">Filamentos</a>.</div>
           </div>
         </div>
+
+        <div class="calc-section">
+          <h3>Tempo</h3>
+          <div class="field">
+            <label>Tempo de impressão (total)</label>
+            <div class="unit-input"><input type="number" min="0" step="any" id="in_horas" placeholder="0" value="${c.horas}" oninput="state.calc.horas=this.value; updateCalcPreview();"><span>h</span></div>
+          </div>
+        </div>
+
+        <div class="calc-section">
+          <h3>Custos</h3>
+          <div class="field">
+            <label>Add-ons / extras (ímanes, parafusos, embalagem…)</label>
+            <div class="unit-input"><input type="number" min="0" step="any" id="in_addons" placeholder="0.00" value="${c.addons}" oninput="state.calc.addons=this.value; updateCalcPreview();"><span>€</span></div>
+          </div>
+          <div class="row2">
+            <div class="field">
+              <label>Taxa de falhas</label>
+              <div class="unit-input"><input type="number" min="0" step="any" id="in_taxa" placeholder="${fmtNum(taxaDefault)}" value="${c.taxaFalhas===null?'':c.taxaFalhas}" oninput="state.calc.taxaFalhas=this.value; updateCalcPreview();"><span>%</span></div>
+              <div class="hint">Vazio = usa definição global (${fmtNum(taxaDefault)}%)</div>
+            </div>
+            <div class="field">
+              <label>Margem de lucro</label>
+              <div class="unit-input"><input type="number" min="0" step="any" id="in_lucro" placeholder="${fmtNum(lucroDefault)}" value="${c.margemLucro===null?'':c.margemLucro}" oninput="state.calc.margemLucro=this.value; updateCalcPreview();"><span>%</span></div>
+              <div class="hint">Vazio = usa definição global (${fmtNum(lucroDefault)}%)</div>
+            </div>
+          </div>
+        </div>
+
         <div style="display:flex;gap:10px;margin-top:6px;">
           <button class="btn btn-accent" style="flex:1;justify-content:center;" onclick="saveCalcToHistory()">${ICONS.plus} Guardar no histórico</button>
           <button class="btn btn-ghost" onclick="clearCalc()">Limpar</button>
@@ -742,17 +755,23 @@ function resolveMateriais(materiais){
 function materialRowHtml(m, ctx, canRemove){
   const updateFn = ctx==='calc' ? 'calcUpdateMaterial' : 'modalUpdateMaterial';
   const removeFn = ctx==='calc' ? 'calcRemoveMaterial' : 'modalRemoveMaterial';
-  return `<div class="material-row" style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
-    <div style="flex:2;">
-      <select onchange="${updateFn}('${m.id}','filKey',this.value)">
-        <option value="">— escolher filamento —</option>
-        ${filamentOptions(m.filKey)}
-      </select>
+  const fil = state.filamentos.find(f=>filKey(f.marca,f.cor)===m.filKey);
+  const lote = fil ? getLoteAtivoCalculo(fil) : null;
+  const preco = fil ? getPrecoKg(fil) : 0;
+  return `<div class="material-row">
+    <div class="material-row-main">
+      <div style="flex:2;min-width:180px;">
+        <select onchange="${updateFn}('${m.id}','filKey',this.value)">
+          <option value="">— escolher filamento —</option>
+          ${filamentOptions(m.filKey)}
+        </select>
+        ${fil ? `<div class="material-meta">${escapeHtml(lote?.nome || 'Sem lote ativo')} · ${fmtEUR(preco)}/kg</div>` : ''}
+      </div>
+      <div style="flex:1;min-width:110px;">
+        <div class="unit-input"><input type="number" min="0" step="any" placeholder="0" value="${m.gramas}" oninput="${updateFn}('${m.id}','gramas',this.value)"><span>g</span></div>
+      </div>
+      ${canRemove ? `<button type="button" class="icon-btn danger" onclick="${removeFn}('${m.id}')">${ICONS.trash}</button>` : `<div style="width:28px;flex-shrink:0;"></div>`}
     </div>
-    <div style="flex:1;">
-      <div class="unit-input"><input type="number" min="0" step="any" placeholder="0" value="${m.gramas}" oninput="${updateFn}('${m.id}','gramas',this.value)"><span>g</span></div>
-    </div>
-    ${canRemove ? `<button type="button" class="icon-btn danger" onclick="${removeFn}('${m.id}')">${ICONS.trash}</button>` : `<div style="width:28px;flex-shrink:0;"></div>`}
   </div>`;
 }
 
@@ -765,6 +784,7 @@ function calcRemoveMaterial(id){
 function calcUpdateMaterial(id, field, value){
   const m = state.calc.materiais.find(x=>x.id===id);
   if(m) m[field] = value;
+  if(field==='filKey'){ render(); return; }
   updateCalcPreview();
 }
 
@@ -813,6 +833,27 @@ function updateCalcPreview(){
   }
 
   target.innerHTML = `
+    <div class="calc-summary-grid">
+      <div class="calc-summary-card"><span>Custo filamento</span><b>${fmtEUR(b.custoFilamento)}</b></div>
+      <div class="calc-summary-card"><span>Eletricidade</span><b>${fmtEUR(b.custoEletricidade)}</b></div>
+      <div class="calc-summary-card"><span>Falhas</span><b>${fmtEUR(b.bufferFalhas)}</b></div>
+      <div class="calc-summary-card"><span>Custo total</span><b>${fmtEUR(b.custoFinal)}</b></div>
+      <div class="calc-summary-card highlight"><span>Preço sugerido</span><b>${fmtEUR(b.precoVenda)}</b></div>
+      <div class="calc-summary-card"><span>Lucro</span><b class="pos">${fmtEUR(b.lucroValor)}</b></div>
+      <div class="calc-summary-card"><span>Margem</span><b>${fmtPct(margemLucro)}</b></div>
+    </div>
+    <div class="calc-material-list">
+      ${validMateriais.map(m=>{
+        const lote = m.loteSnapshot;
+        return `<div class="calc-material-card">
+          <div>
+            <strong>${escapeHtml(m.marca)} · ${escapeHtml(m.cor)}</strong>
+            <span>${lote?.loteNome || 'Sem lote ativo'} · ${fmtEUR(m.precoKg)}/kg</span>
+          </div>
+          <b>${fmtNum(m.gramas)}g · ${fmtEUR((m.gramas*m.precoKg)/1000)}</b>
+        </div>`;
+      }).join('')}
+    </div>
     <div class="stack-wrap">
       <div class="stack">
         ${layerHtml('Lucro', b.lucroValor, total, 'var(--teal)')}
@@ -933,25 +974,30 @@ function pedidosFiltrados(){
 function renderHist(){
   const list = pedidosFiltrados();
   const all = state.pedidos.filter(p=>p.deleted !== true);
-  const totalCusto = all.reduce((s,p)=>s+getPedidoCostValues(p).custoFinal,0);
+  const vendidosList = all.filter(p=>p.status==='vendido' || p.recebido!==null);
+  const totalVendido = vendidosList.reduce((s,p)=>s+getPedidoCostValues(p).precoVenda,0);
   const totalRecebido = all.filter(p=>p.recebido!==null).reduce((s,p)=>s+p.recebido,0);
-  const totalLucro = all.filter(p=>p.recebido!==null).reduce((s,p)=>s+(p.recebido-getPedidoCostValues(p).custoFinal),0);
-  const pendentes = all.filter(p=>p.status==='orcamento').length;
+  const lucroEstimado = all.reduce((s,p)=>s+(getPedidoCostValues(p).precoVenda-getPedidoCostValues(p).custoFinal),0);
+  const pedidosAbertos = all.filter(p=>p.status!=='vendido' && p.recebido===null).length;
+  const orcamentos = all.filter(p=>p.status==='orcamento').length;
+  const vendidos = vendidosList.length;
 
   return `
     <div class="page-head">
       <div>
         <h1>Histórico de impressões</h1>
-        <p>${all.length} registo${all.length===1?'':'s'} no total · ${pendentes} por vender</p>
+        <p>${all.length} registo${all.length===1?'':'s'} no total · ${pedidosAbertos} em aberto</p>
       </div>
       <button class="btn btn-ghost btn-sm" onclick="exportCSV()">${ICONS.download} Exportar CSV</button>
     </div>
 
     <div class="stat-cards">
-      <div class="stat-card"><div class="k">Custo total investido</div><div class="v">${fmtEUR(totalCusto)}</div></div>
+      <div class="stat-card"><div class="k">Total vendido</div><div class="v">${fmtEUR(totalVendido)}</div></div>
       <div class="stat-card"><div class="k">Total recebido</div><div class="v">${fmtEUR(totalRecebido)}</div></div>
-      <div class="stat-card"><div class="k">Lucro real (vendidos)</div><div class="v ${totalLucro>=0?'pos':'neg'}">${fmtEUR(totalLucro)}</div></div>
-      <div class="stat-card"><div class="k">Orçamentos por vender</div><div class="v">${pendentes}</div></div>
+      <div class="stat-card"><div class="k">Lucro estimado</div><div class="v ${lucroEstimado>=0?'pos':'neg'}">${fmtEUR(lucroEstimado)}</div></div>
+      <div class="stat-card"><div class="k">Pedidos em aberto</div><div class="v">${pedidosAbertos}</div></div>
+      <div class="stat-card"><div class="k">Orçamentos</div><div class="v">${orcamentos}</div></div>
+      <div class="stat-card"><div class="k">Vendidos</div><div class="v">${vendidos}</div></div>
     </div>
 
     <div class="toolbar">
