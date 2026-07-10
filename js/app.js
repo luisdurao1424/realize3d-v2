@@ -1226,6 +1226,20 @@ async function saveEditPedido(){
 /* ---------------------------------------------------------------
    RENDER: FILAMENTOS
 --------------------------------------------------------------- */
+function getLoteUiState(filamento){
+  const lote = getLoteAtivoCalculo(filamento);
+  if(lote) return {lote, label:'Ativo', cls:'badge-vend'};
+  if(Array.isArray(filamento?.lotes) && filamento.lotes.length>0) return {lote:null, label:'Sem lote ativo', cls:'badge-orc'};
+  return {lote:null, label:'Sem lote', cls:'badge-orc'};
+}
+
+function renderFilMetric(label, value, cls=''){
+  return `<div style="min-width:0;">
+    <div class="muted" style="font-size:11px;margin-bottom:3px;">${label}</div>
+    <div class="${cls}" style="font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${value}</div>
+  </div>`;
+}
+
 function renderFil(){
   const list = [...state.filamentos].sort((a,b)=>(a.marca+a.cor).localeCompare(b.marca+b.cor));
   return `
@@ -1238,33 +1252,42 @@ function renderFil(){
     </div>
     <div class="card" style="padding:0;overflow-x:auto;">
       ${list.length===0 ? `<div class="empty-state">${ICONS.fil}<p>Ainda não tens filamentos registados.</p></div>` : `
-      <table>
-        <thead><tr>
-          <th>Marca</th><th>Tipo</th><th>Cor</th><th>Lote ativo</th><th>Fornecedor</th><th>Data</th><th class="num">€/kg</th><th class="num">Preço bobina</th><th class="num">Tamanho</th><th></th>
-        </tr></thead>
-        <tbody>
-          ${list.map(f=>{
-            const lote = getLoteAtivoCalculo(f);
-            return `
-            <tr>
-              <td>${escapeHtml(f.marca)}</td>
-              <td class="muted">${escapeHtml(f.tipo || f.material || '—')}</td>
-              <td><span style="display:inline-flex;align-items:center;gap:7px;"><span style="width:9px;height:9px;border-radius:50%;background:${colorSwatch(f.cor)};display:inline-block;border:1px solid var(--border);"></span>${escapeHtml(f.cor)}</span></td>
-              <td>${escapeHtml(lote?.nome || 'Sem lote')}</td>
-              <td class="muted">${escapeHtml(lote?.fornecedor || '—')}</td>
-              <td class="muted">${lote?.data ? fmtDate(lote.data) : '—'}</td>
-              <td class="num mono" style="color:var(--accent);font-weight:600;">${fmtEUR(getPrecoKgFilamento(f))}</td>
-              <td class="num">${f.preco ? fmtEUR(f.preco) : '—'}</td>
-              <td class="num">${fmtNum(f.spool,2)} kg</td>
-              <td><div class="row-actions">
-                <button class="btn btn-ghost btn-sm" title="Lotes" onclick="openLotesModal('${f.id}')">${ICONS.box} Lotes</button>
-                <button class="icon-btn" onclick="openFilModal('${f.id}')">${ICONS.edit}</button>
-                <button class="icon-btn danger" onclick="confirmDeleteFil('${f.id}')">${ICONS.trash}</button>
-              </div></td>
-            </tr>`;
-          }).join('')}
-        </tbody>
-      </table>`}
+      <div style="display:grid;gap:0;">
+        ${list.map(f=>{
+          const loteState = getLoteUiState(f);
+          const lote = loteState.lote;
+          return `<article style="padding:14px 16px;border-bottom:1px solid var(--border-soft);">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+              <div style="min-width:220px;flex:1;">
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                  <strong style="font-size:14px;">${escapeHtml(f.marca)}</strong>
+                  <span class="badge ${loteState.cls}">${loteState.label}</span>
+                </div>
+                <div class="muted" style="font-size:11px;margin-top:4px;line-height:1.35;">
+                  ${escapeHtml(f.tipo || f.material || 'Tipo n/d')} ·
+                  <span style="display:inline-flex;align-items:center;gap:6px;">
+                    <span style="width:9px;height:9px;border-radius:50%;background:${colorSwatch(f.cor)};display:inline-block;border:1px solid var(--border);"></span>
+                    ${escapeHtml(f.cor)}
+                  </span>
+                </div>
+              </div>
+              <div class="row-actions" style="justify-content:flex-end;">
+                <button class="btn btn-accent btn-sm" title="Gerir lotes" onclick="openLotesModal('${f.id}')">${ICONS.box} Lotes</button>
+                <button class="btn btn-ghost btn-sm" title="Editar filamento" onclick="openFilModal('${f.id}')">${ICONS.edit} Editar</button>
+                <button class="btn btn-danger btn-sm" title="Eliminar filamento" onclick="confirmDeleteFil('${f.id}')">${ICONS.trash} Eliminar</button>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;margin-top:14px;">
+              ${renderFilMetric('Lote ativo', escapeHtml(lote?.nome || 'Sem lote'))}
+              ${renderFilMetric('Fornecedor', escapeHtml(lote?.fornecedor || 'n/d'))}
+              ${renderFilMetric('Data', lote?.data ? fmtDate(lote.data) : 'n/d')}
+              ${renderFilMetric('€/kg', fmtEUR(getPrecoKgFilamento(f)), 'mono')}
+              ${renderFilMetric('Preço bobina', f.preco ? fmtEUR(f.preco) : 'n/d')}
+              ${renderFilMetric('Tamanho', `${fmtNum(f.spool,2)} kg`)}
+            </div>
+          </article>`;
+        }).join('')}
+      </div>`}
     </div>
   `;
 }
@@ -1530,14 +1553,25 @@ function renderModal(){
     const lotes = filamento.lotes || [];
     const lotesHtml = lotes.length ? lotes.map(l=>{
       const lf = m.lotesForm?.[l.id] || {nome:l.nome||'',data:l.data||'',fornecedor:l.fornecedor||'',precoKg:l.precoKg ?? '',ativo:!!l.ativo};
-      const estado = l.arquivado ? 'Arquivado' : (l.ativo ? 'Ativo' : 'Inativo');
+      const isActive = !!l.ativo && !l.arquivado;
+      const estado = l.arquivado ? 'Arquivado' : (isActive ? 'Ativo' : 'Inativo');
       const badgeCls = l.arquivado ? 'badge-orc' : (l.ativo ? 'badge-vend' : 'badge-orc');
       return `
-        <div style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px;">
-          <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:10px;">
-            <span class="badge ${badgeCls}">${estado}</span>
+        <div style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px;background:var(--surface);">
+          <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:12px;flex-wrap:wrap;">
+            <div style="min-width:180px;flex:1;">
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <strong>${escapeHtml(l.nome || 'Lote sem nome')}</strong>
+                <span class="badge ${badgeCls}">${estado}</span>
+              </div>
+              <div class="muted" style="font-size:11px;margin-top:4px;line-height:1.35;">
+                ${l.precoKg!=null ? `${fmtEUR(l.precoKg)}/kg` : 'Preço n/d'} ·
+                Fornecedor: ${escapeHtml(l.fornecedor || 'n/d')} ·
+                Data: ${l.data ? fmtDate(l.data) : 'n/d'}
+              </div>
+            </div>
             <div class="row-actions">
-              ${!l.ativo && !l.arquivado ? `<button class="btn btn-ghost btn-sm" onclick="setLoteAtivo('${filamento.id}','${l.id}')">Ativar</button>` : ''}
+              ${!isActive && !l.arquivado ? `<button class="btn btn-ghost btn-sm" onclick="setLoteAtivo('${filamento.id}','${l.id}')">Tornar ativo</button>` : ''}
               ${!l.arquivado ? `<button class="btn btn-danger btn-sm" onclick="archiveLoteFilamento('${filamento.id}','${l.id}')">Arquivar</button>` : ''}
             </div>
           </div>
@@ -1553,16 +1587,22 @@ function renderModal(){
             <input type="checkbox" ${lf.ativo?'checked':''} onchange="state.modal.lotesForm['${l.id}'].ativo=this.checked"> Ativo
           </label>
           <div class="modal-actions" style="margin-top:10px;">
-            <button class="btn btn-ghost btn-sm" onclick="saveExistingLoteFilamento('${filamento.id}','${l.id}')">Guardar lote</button>
+            <button class="btn btn-ghost btn-sm" onclick="saveExistingLoteFilamento('${filamento.id}','${l.id}')">${ICONS.edit} Editar lote</button>
           </div>
         </div>
       `;
     }).join('') : `<div class="empty-state" style="padding:24px 10px;">${ICONS.box}<p>Sem lotes registados.</p></div>`;
     const f = m.form;
     return modalWrap('Lotes do filamento', `
-      <p style="color:var(--text-dim);font-size:13.5px;margin-top:0;line-height:1.5;">
-        <b>${escapeHtml(filamento.marca)} · ${escapeHtml(filamento.tipo || filamento.material || 'Tipo n/d')} · ${escapeHtml(filamento.cor)}</b>
-      </p>
+      <div style="border:1px solid var(--border-soft);border-radius:8px;padding:12px;margin-bottom:14px;background:var(--surface-2);">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <b>${escapeHtml(filamento.marca)}</b>
+          <span class="badge ${getLoteUiState(filamento).cls}">${getLoteUiState(filamento).label}</span>
+        </div>
+        <div class="muted" style="font-size:12px;margin-top:5px;">
+          ${escapeHtml(filamento.tipo || filamento.material || 'Tipo n/d')} · ${escapeHtml(filamento.cor)}
+        </div>
+      </div>
       ${lotesHtml}
       <div style="border-top:1px solid var(--border-soft);padding-top:14px;margin-top:14px;">
         <h3 style="font-size:14px;margin-bottom:12px;">+ Novo lote</h3>

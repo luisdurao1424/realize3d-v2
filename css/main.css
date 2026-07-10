@@ -180,7 +180,7 @@
   }
   .badge-orc{background:var(--blue-soft);color:var(--blue);}
   .badge-vend{background:var(--teal-soft);color:var(--teal);}
-  .row-actions{display:flex;gap:6px;justify-content:flex-end;}
+  .row-actions{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;}
   .icon-btn{
     width:28px;height:28px;border-radius:6px;border:1px solid var(--border);background:var(--surface-2);
     display:flex;align-items:center;justify-content:center;color:var(--text-dim);flex-shrink:0;
