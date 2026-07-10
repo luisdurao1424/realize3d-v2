@@ -975,8 +975,8 @@ function renderHistTable(){
             <td>
               <div class="row-actions">
                 ${showTrash ? `
-                  <button class="icon-btn" title="Restaurar" onclick="restorePedidoFromTrash('${p.id}')">${ICONS.check}</button>
-                  <button class="icon-btn danger" title="Eliminar definitivamente" onclick="confirmPermanentDeletePedido('${p.id}')">${ICONS.trash}</button>
+                  <button class="btn btn-ghost btn-sm" title="Restaurar" onclick="restorePedidoFromTrash('${p.id}')">${ICONS.check} Restaurar</button>
+                  <button class="btn btn-danger btn-sm" title="Eliminar definitivamente" onclick="confirmPermanentDeletePedido('${p.id}')">${ICONS.trash} Eliminar definitivamente</button>
                 ` : `
                   ${p.status==='orcamento' ? `<button class="icon-btn" title="Marcar vendido" onclick="openVendaModal('${p.id}')">${ICONS.euro}</button>` : ''}
                   <button class="icon-btn" title="Duplicar" onclick="openDuplicateModal('${p.id}')">${ICONS.copy}</button>
@@ -1205,14 +1205,14 @@ function renderFil(){
               <td>${escapeHtml(f.marca)}</td>
               <td class="muted">${escapeHtml(f.tipo || f.material || '—')}</td>
               <td><span style="display:inline-flex;align-items:center;gap:7px;"><span style="width:9px;height:9px;border-radius:50%;background:${colorSwatch(f.cor)};display:inline-block;border:1px solid var(--border);"></span>${escapeHtml(f.cor)}</span></td>
-              <td>${escapeHtml(lote?.nome || '—')}</td>
+              <td>${escapeHtml(lote?.nome || 'Sem lote')}</td>
               <td class="muted">${escapeHtml(lote?.fornecedor || '—')}</td>
               <td class="muted">${lote?.data ? fmtDate(lote.data) : '—'}</td>
               <td class="num mono" style="color:var(--accent);font-weight:600;">${fmtEUR(getPrecoKgFilamento(f))}</td>
               <td class="num">${f.preco ? fmtEUR(f.preco) : '—'}</td>
               <td class="num">${fmtNum(f.spool,2)} kg</td>
               <td><div class="row-actions">
-                <button class="icon-btn" title="Lotes" onclick="openLotesModal('${f.id}')">${ICONS.box}</button>
+                <button class="btn btn-ghost btn-sm" title="Lotes" onclick="openLotesModal('${f.id}')">${ICONS.box} Lotes</button>
                 <button class="icon-btn" onclick="openFilModal('${f.id}')">${ICONS.edit}</button>
                 <button class="icon-btn danger" onclick="confirmDeleteFil('${f.id}')">${ICONS.trash}</button>
               </div></td>
@@ -1516,7 +1516,7 @@ function renderModal(){
     const f = m.form;
     return modalWrap('Lotes do filamento', `
       <p style="color:var(--text-dim);font-size:13.5px;margin-top:0;line-height:1.5;">
-        <b>${escapeHtml(filamento.marca)} — ${escapeHtml(filamento.cor)}</b>
+        <b>${escapeHtml(filamento.marca)} · ${escapeHtml(filamento.tipo || filamento.material || 'Tipo n/d')} · ${escapeHtml(filamento.cor)}</b>
       </p>
       ${lotesHtml}
       <div style="border-top:1px solid var(--border-soft);padding-top:14px;margin-top:14px;">
