@@ -233,6 +233,27 @@
   .history-cell b{font-weight:700;}
   .history-label{display:none;}
   .history-actions{justify-content:flex-end;}
+  .fil-list{min-width:900px;}
+  .fil-header,.fil-row{
+    display:grid;grid-template-columns:minmax(120px,1fr) minmax(105px,.9fr) minmax(105px,.9fr) minmax(150px,1.25fr) 82px minmax(120px,1fr) 92px minmax(220px,1.35fr);
+    gap:10px;align-items:center;
+  }
+  .fil-header{
+    padding:10px 14px;border-bottom:1px solid var(--border);color:var(--text-faint);
+    font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;font-weight:700;
+  }
+  .fil-row{padding:11px 14px;border-bottom:1px solid var(--border-soft);font-size:12.5px;}
+  .fil-row:last-child{border-bottom:none;}
+  .fil-name strong{font-size:13px;}
+  .fil-label{display:none;}
+  .fil-actions{justify-content:flex-end;}
+  .lote-card{border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px;background:var(--surface);}
+  .lote-summary{display:grid;grid-template-columns:minmax(150px,1fr) minmax(170px,1.2fr) auto;gap:10px;align-items:start;margin-bottom:12px;}
+  .lote-title{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  .lote-meta{display:flex;gap:8px 12px;flex-wrap:wrap;color:var(--text-faint);font-size:11px;line-height:1.35;}
+  .lote-actions{justify-content:flex-end;}
+  .lote-edit-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  .new-lote-box{border:1px solid var(--border-soft);border-radius:8px;padding:14px;margin-top:14px;background:var(--surface-2);}
 
   .toolbar{display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap;align-items:center;}
   .toolbar input[type=text]{max-width:240px;}
@@ -328,6 +349,15 @@
     .history-cell{display:flex;align-items:center;justify-content:space-between;gap:8px;border-top:1px solid var(--border-soft);padding-top:7px;}
     .history-label{display:inline;color:var(--text-faint);font-size:11px;font-family:var(--font-sans);font-weight:500;}
     .history-actions{grid-column:1/-1;justify-content:flex-start;border-top:1px solid var(--border-soft);padding-top:8px;}
+    .fil-list{min-width:0;}
+    .fil-header{display:none;}
+    .fil-row{display:grid;grid-template-columns:1fr 1fr;gap:8px 12px;padding:12px 13px;align-items:start;}
+    .fil-name{grid-column:1/-1;}
+    .fil-label{display:block;color:var(--text-faint);font-size:11px;margin-bottom:3px;}
+    .fil-actions{grid-column:1/-1;justify-content:flex-start;border-top:1px solid var(--border-soft);padding-top:8px;}
+    .lote-summary{grid-template-columns:1fr;}
+    .lote-actions{justify-content:flex-start;}
+    .lote-edit-grid{grid-template-columns:1fr;}
   }
   .sidebar-scrim{display:none;}
   @media (max-width:760px){

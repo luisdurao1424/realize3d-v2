@@ -1330,15 +1330,26 @@ async function saveEditPedido(){
 function getLoteUiState(filamento){
   const lote = getLoteAtivoCalculo(filamento);
   if(lote) return {lote, label:'Ativo', cls:'badge-vend'};
-  if(Array.isArray(filamento?.lotes) && filamento.lotes.length>0) return {lote:null, label:'Sem lote ativo', cls:'badge-orc'};
+  if(Array.isArray(filamento?.lotes) && filamento.lotes.length>0 && filamento.lotes.every(l=>l?.arquivado)) return {lote:null, label:'Arquivado', cls:'badge-orc'};
+  if(Array.isArray(filamento?.lotes) && filamento.lotes.length>0) return {lote:null, label:'Sem lote', cls:'badge-orc'};
   return {lote:null, label:'Sem lote', cls:'badge-orc'};
 }
 
-function renderFilMetric(label, value, cls=''){
-  return `<div style="min-width:0;">
-    <div class="muted" style="font-size:11px;margin-bottom:3px;">${label}</div>
-    <div class="${cls}" style="font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${value}</div>
-  </div>`;
+function normalizeLotesFilamento(filamento, persist=false){
+  if(!filamento || !Array.isArray(filamento.lotes)) return false;
+  let changed = false;
+  filamento.lotes.forEach(l=>{
+    if(l?.arquivado && l.ativo){
+      l.ativo = false;
+      changed = true;
+    }
+  });
+  const active = filamento.lotes.filter(l=>l && l.ativo && !l.arquivado);
+  if(active.length>1){
+    active.slice(1).forEach(l=>{ l.ativo = false; changed = true; });
+  }
+  if(changed && persist) touchFilamentos();
+  return changed;
 }
 
 function renderFil(){
@@ -1353,39 +1364,27 @@ function renderFil(){
     </div>
     <div class="card" style="padding:0;overflow-x:auto;">
       ${list.length===0 ? `<div class="empty-state">${ICONS.fil}<p>Ainda não tens filamentos registados.</p></div>` : `
-      <div style="display:grid;gap:0;">
+      <div class="fil-list">
+        <div class="fil-header">
+          <span>Marca</span><span>Tipo</span><span>Cor</span><span>Lote ativo</span><span>€/kg</span><span>Fornecedor</span><span>Data</span><span>Ações</span>
+        </div>
         ${list.map(f=>{
+          normalizeLotesFilamento(f);
           const loteState = getLoteUiState(f);
           const lote = loteState.lote;
-          return `<article style="padding:14px 16px;border-bottom:1px solid var(--border-soft);">
-            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
-              <div style="min-width:220px;flex:1;">
-                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                  <strong style="font-size:14px;">${escapeHtml(f.marca)}</strong>
-                  <span class="badge ${loteState.cls}">${loteState.label}</span>
-                </div>
-                <div class="muted" style="font-size:11px;margin-top:4px;line-height:1.35;">
-                  ${escapeHtml(f.tipo || f.material || 'Tipo n/d')} ·
-                  <span style="display:inline-flex;align-items:center;gap:6px;">
-                    <span style="width:9px;height:9px;border-radius:50%;background:${colorSwatch(f.cor)};display:inline-block;border:1px solid var(--border);"></span>
-                    ${escapeHtml(f.cor)}
-                  </span>
-                </div>
-              </div>
-              <div class="row-actions" style="justify-content:flex-end;">
+          return `<article class="fil-row">
+              <div class="fil-name"><span class="fil-label">Marca</span><strong>${escapeHtml(f.marca)}</strong></div>
+              <div><span class="fil-label">Tipo</span>${escapeHtml(f.tipo || f.material || 'Tipo n/d')}</div>
+              <div><span class="fil-label">Cor</span><span style="display:inline-flex;align-items:center;gap:7px;"><span style="width:9px;height:9px;border-radius:50%;background:${colorSwatch(f.cor)};display:inline-block;border:1px solid var(--border);"></span>${escapeHtml(f.cor)}</span></div>
+              <div><span class="fil-label">Lote ativo</span><span style="display:inline-flex;align-items:center;gap:7px;flex-wrap:wrap;">${escapeHtml(lote?.nome || 'Sem lote')} <span class="badge ${loteState.cls}">${loteState.label}</span></span></div>
+              <div class="mono"><span class="fil-label">€/kg</span><b style="color:var(--accent);">${lote ? fmtEUR(getPrecoKgFilamento(f)) : '—'}</b></div>
+              <div class="muted"><span class="fil-label">Fornecedor</span>${escapeHtml(lote?.fornecedor || 'n/d')}</div>
+              <div class="muted"><span class="fil-label">Data</span>${lote?.data ? fmtDate(lote.data) : 'n/d'}</div>
+              <div class="row-actions fil-actions">
                 <button class="btn btn-accent btn-sm" title="Gerir lotes" onclick="openLotesModal('${f.id}')">${ICONS.box} Lotes</button>
                 <button class="btn btn-ghost btn-sm" title="Editar filamento" onclick="openFilModal('${f.id}')">${ICONS.edit} Editar</button>
                 <button class="btn btn-danger btn-sm" title="Eliminar filamento" onclick="confirmDeleteFil('${f.id}')">${ICONS.trash} Eliminar</button>
               </div>
-            </div>
-            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;margin-top:14px;">
-              ${renderFilMetric('Lote ativo', escapeHtml(lote?.nome || 'Sem lote'))}
-              ${renderFilMetric('Fornecedor', escapeHtml(lote?.fornecedor || 'n/d'))}
-              ${renderFilMetric('Data', lote?.data ? fmtDate(lote.data) : 'n/d')}
-              ${renderFilMetric('€/kg', fmtEUR(getPrecoKgFilamento(f)), 'mono')}
-              ${renderFilMetric('Preço bobina', f.preco ? fmtEUR(f.preco) : 'n/d')}
-              ${renderFilMetric('Tamanho', `${fmtNum(f.spool,2)} kg`)}
-            </div>
           </article>`;
         }).join('')}
       </div>`}
@@ -1456,6 +1455,7 @@ function openLotesModal(filamentoId){
   const filamento = state.filamentos.find(f=>f.id===filamentoId);
   if(!filamento) return;
   migrateFilamentosToLotes();
+  normalizeLotesFilamento(filamento, true);
   const lotesForm = {};
   (filamento.lotes || []).forEach(l=>{
     lotesForm[l.id] = {
@@ -1656,35 +1656,31 @@ function renderModal(){
       const lf = m.lotesForm?.[l.id] || {nome:l.nome||'',data:l.data||'',fornecedor:l.fornecedor||'',precoKg:l.precoKg ?? '',ativo:!!l.ativo};
       const isActive = !!l.ativo && !l.arquivado;
       const estado = l.arquivado ? 'Arquivado' : (isActive ? 'Ativo' : 'Inativo');
-      const badgeCls = l.arquivado ? 'badge-orc' : (l.ativo ? 'badge-vend' : 'badge-orc');
+      const badgeCls = l.arquivado ? 'badge-orc' : (isActive ? 'badge-vend' : 'badge-orc');
       return `
-        <div style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px;background:var(--surface);">
-          <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:12px;flex-wrap:wrap;">
-            <div style="min-width:180px;flex:1;">
-              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                <strong>${escapeHtml(l.nome || 'Lote sem nome')}</strong>
-                <span class="badge ${badgeCls}">${estado}</span>
-              </div>
-              <div class="muted" style="font-size:11px;margin-top:4px;line-height:1.35;">
-                ${l.precoKg!=null ? `${fmtEUR(l.precoKg)}/kg` : 'Preço n/d'} ·
-                Fornecedor: ${escapeHtml(l.fornecedor || 'n/d')} ·
-                Data: ${l.data ? fmtDate(l.data) : 'n/d'}
-              </div>
+        <div class="lote-card">
+          <div class="lote-summary">
+            <div class="lote-title">
+              <strong>${escapeHtml(l.nome || 'Lote sem nome')}</strong>
+              <span class="badge ${badgeCls}">${estado}</span>
             </div>
-            <div class="row-actions">
+            <div class="lote-meta">
+              <span><b>${l.precoKg!=null ? `${fmtEUR(l.precoKg)}/kg` : 'Preço n/d'}</b></span>
+              <span>Fornecedor: ${escapeHtml(l.fornecedor || 'n/d')}</span>
+              <span>Data: ${l.data ? fmtDate(l.data) : 'n/d'}</span>
+            </div>
+            <div class="row-actions lote-actions">
               ${!isActive && !l.arquivado ? `<button class="btn btn-ghost btn-sm" onclick="setLoteAtivo('${filamento.id}','${l.id}')">Tornar ativo</button>` : ''}
               ${!l.arquivado ? `<button class="btn btn-danger btn-sm" onclick="archiveLoteFilamento('${filamento.id}','${l.id}')">Arquivar</button>` : ''}
             </div>
           </div>
-          <div class="row2">
+          <div class="lote-edit-grid">
             <div class="field"><label>Nome</label><input type="text" value="${escapeHtml(lf.nome)}" oninput="state.modal.lotesForm['${l.id}'].nome=this.value"></div>
             <div class="field"><label>Data</label><input type="date" value="${escapeHtml(lf.data)}" oninput="state.modal.lotesForm['${l.id}'].data=this.value"></div>
-          </div>
-          <div class="row2">
             <div class="field"><label>Fornecedor</label><input type="text" value="${escapeHtml(lf.fornecedor)}" oninput="state.modal.lotesForm['${l.id}'].fornecedor=this.value"></div>
             <div class="field"><label>Preço €/kg</label><div class="unit-input"><input type="number" step="any" min="0" value="${escapeHtml(lf.precoKg)}" oninput="state.modal.lotesForm['${l.id}'].precoKg=this.value"><span>€/kg</span></div></div>
           </div>
-          <label style="display:flex;align-items:center;gap:8px;margin-bottom:0;">
+          <label style="display:flex;align-items:center;gap:8px;margin-bottom:0;font-size:12px;">
             <input type="checkbox" ${lf.ativo?'checked':''} onchange="state.modal.lotesForm['${l.id}'].ativo=this.checked"> Ativo
           </label>
           <div class="modal-actions" style="margin-top:10px;">
@@ -1705,7 +1701,7 @@ function renderModal(){
         </div>
       </div>
       ${lotesHtml}
-      <div style="border-top:1px solid var(--border-soft);padding-top:14px;margin-top:14px;">
+      <div class="new-lote-box">
         <h3 style="font-size:14px;margin-bottom:12px;">+ Novo lote</h3>
         <div class="row2">
           <div class="field"><label>Nome</label><input type="text" value="${escapeHtml(f.nome)}" oninput="state.modal.form.nome=this.value" placeholder="ex: Lote 2"></div>
