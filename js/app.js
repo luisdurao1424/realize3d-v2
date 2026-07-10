@@ -697,7 +697,7 @@ function renderCalc(){
         </div>
 
         <div class="calc-section">
-          <h3>Tempo</h3>
+          <h3>Tempo de impressão</h3>
           <div class="field">
             <label>Tempo de impressão (total)</label>
             <div class="unit-input"><input type="number" min="0" step="any" id="in_horas" placeholder="0" value="${c.horas}" oninput="state.calc.horas=this.value; updateCalcPreview();"><span>h</span></div>
@@ -705,22 +705,24 @@ function renderCalc(){
         </div>
 
         <div class="calc-section">
-          <h3>Custos</h3>
+          <h3>Custos adicionais</h3>
           <div class="field">
             <label>Add-ons / extras (ímanes, parafusos, embalagem…)</label>
             <div class="unit-input"><input type="number" min="0" step="any" id="in_addons" placeholder="0.00" value="${c.addons}" oninput="state.calc.addons=this.value; updateCalcPreview();"><span>€</span></div>
           </div>
-          <div class="row2">
-            <div class="field">
-              <label>Taxa de falhas</label>
-              <div class="unit-input"><input type="number" min="0" step="any" id="in_taxa" placeholder="${fmtNum(taxaDefault)}" value="${c.taxaFalhas===null?'':c.taxaFalhas}" oninput="state.calc.taxaFalhas=this.value; updateCalcPreview();"><span>%</span></div>
-              <div class="hint">Vazio = usa definição global (${fmtNum(taxaDefault)}%)</div>
-            </div>
-            <div class="field">
-              <label>Margem de lucro</label>
-              <div class="unit-input"><input type="number" min="0" step="any" id="in_lucro" placeholder="${fmtNum(lucroDefault)}" value="${c.margemLucro===null?'':c.margemLucro}" oninput="state.calc.margemLucro=this.value; updateCalcPreview();"><span>%</span></div>
-              <div class="hint">Vazio = usa definição global (${fmtNum(lucroDefault)}%)</div>
-            </div>
+          <div class="field">
+            <label>Taxa de falhas</label>
+            <div class="unit-input"><input type="number" min="0" step="any" id="in_taxa" placeholder="${fmtNum(taxaDefault)}" value="${c.taxaFalhas===null?'':c.taxaFalhas}" oninput="state.calc.taxaFalhas=this.value; updateCalcPreview();"><span>%</span></div>
+            <div class="hint">Vazio = usa definição global (${fmtNum(taxaDefault)}%)</div>
+          </div>
+        </div>
+
+        <div class="calc-section">
+          <h3>Margem / preço final</h3>
+          <div class="field">
+            <label>Margem de lucro</label>
+            <div class="unit-input"><input type="number" min="0" step="any" id="in_lucro" placeholder="${fmtNum(lucroDefault)}" value="${c.margemLucro===null?'':c.margemLucro}" oninput="state.calc.margemLucro=this.value; updateCalcPreview();"><span>%</span></div>
+            <div class="hint">Vazio = usa definição global (${fmtNum(lucroDefault)}%)</div>
           </div>
         </div>
 
@@ -836,21 +838,31 @@ function updateCalcPreview(){
     <div class="calc-summary-grid">
       <div class="calc-summary-card"><span>Custo filamento</span><b>${fmtEUR(b.custoFilamento)}</b></div>
       <div class="calc-summary-card"><span>Eletricidade</span><b>${fmtEUR(b.custoEletricidade)}</b></div>
-      <div class="calc-summary-card"><span>Falhas</span><b>${fmtEUR(b.bufferFalhas)}</b></div>
+      <div class="calc-summary-card"><span>Taxa de falhas</span><b>${fmtEUR(b.bufferFalhas)}</b></div>
+      <div class="calc-summary-card"><span>Addons</span><b>${fmtEUR(b.addons)}</b></div>
       <div class="calc-summary-card"><span>Custo total</span><b>${fmtEUR(b.custoFinal)}</b></div>
       <div class="calc-summary-card highlight"><span>Preço sugerido</span><b>${fmtEUR(b.precoVenda)}</b></div>
-      <div class="calc-summary-card"><span>Lucro</span><b class="pos">${fmtEUR(b.lucroValor)}</b></div>
-      <div class="calc-summary-card"><span>Margem</span><b>${fmtPct(margemLucro)}</b></div>
+      <div class="calc-summary-card"><span>Lucro estimado</span><b class="pos">${fmtEUR(b.lucroValor)}</b></div>
+    </div>
+    <div class="calc-final-card">
+      <span>Resumo final</span>
+      <strong>${fmtEUR(b.precoVenda)}</strong>
+      <small>Custo total ${fmtEUR(b.custoFinal)} · lucro ${fmtEUR(b.lucroValor)} · margem ${fmtPct(margemLucro)}</small>
     </div>
     <div class="calc-material-list">
       ${validMateriais.map(m=>{
         const lote = m.loteSnapshot;
+        const custo = (m.gramas*m.precoKg)/1000;
         return `<div class="calc-material-card">
-          <div>
+          <div class="calc-material-main">
             <strong>${escapeHtml(m.marca)} · ${escapeHtml(m.cor)}</strong>
-            <span>${lote?.loteNome || 'Sem lote ativo'} · ${fmtEUR(m.precoKg)}/kg</span>
+            <span>${lote?.loteNome || 'Sem lote ativo'}</span>
           </div>
-          <b>${fmtNum(m.gramas)}g · ${fmtEUR((m.gramas*m.precoKg)/1000)}</b>
+          <div class="calc-material-values">
+            <span>${fmtEUR(m.precoKg)}/kg</span>
+            <span>${fmtNum(m.gramas)} g</span>
+            <b>${fmtEUR(custo)}</b>
+          </div>
         </div>`;
       }).join('')}
     </div>
@@ -1053,8 +1065,8 @@ function renderHist(){
     </div>
 
     <div class="stat-cards">
-      <div class="stat-card"><div class="k">Total vendido</div><div class="v">${fmtEUR(totalVendido)}</div></div>
-      <div class="stat-card"><div class="k">Total recebido</div><div class="v">${fmtEUR(totalRecebido)}</div></div>
+      <div class="stat-card stat-card-main"><div class="k">Total vendido</div><div class="v">${fmtEUR(totalVendido)}</div></div>
+      <div class="stat-card stat-card-main"><div class="k">Total recebido</div><div class="v">${fmtEUR(totalRecebido)}</div></div>
       <div class="stat-card"><div class="k">Lucro estimado</div><div class="v ${lucroEstimado>=0?'pos':'neg'}">${fmtEUR(lucroEstimado)}</div></div>
       <div class="stat-card"><div class="k">Pedidos em aberto</div><div class="v">${pedidosAbertos}</div></div>
       <div class="stat-card"><div class="k">Orçamentos</div><div class="v">${orcamentos}</div></div>

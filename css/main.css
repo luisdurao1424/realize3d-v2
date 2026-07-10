@@ -144,11 +144,21 @@
   .calc-summary-card b{font-family:var(--font-mono);font-size:15px;}
   .calc-summary-card.highlight{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent-soft);}
   .calc-summary-card.highlight b{color:var(--accent);}
+  .calc-final-card{
+    border:1px solid var(--accent);border-radius:9px;padding:13px 14px;margin:0 0 14px;
+    background:linear-gradient(180deg,var(--accent-soft),transparent);
+  }
+  .calc-final-card span{display:block;color:var(--text-faint);font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;}
+  .calc-final-card strong{display:block;color:var(--accent);font-family:var(--font-mono);font-size:24px;line-height:1.1;margin-bottom:5px;}
+  .calc-final-card small{display:block;color:var(--text-dim);font-size:11px;line-height:1.35;}
   .calc-material-list{display:grid;gap:8px;margin-bottom:14px;}
-  .calc-material-card{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;border:1px solid var(--border-soft);border-radius:8px;padding:10px 12px;background:var(--surface);}
+  .calc-material-card{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;border:1px solid var(--border-soft);border-radius:8px;padding:10px 12px;background:var(--surface);}
   .calc-material-card strong{display:block;font-size:12px;margin-bottom:3px;}
   .calc-material-card span{display:block;font-size:11px;color:var(--text-faint);line-height:1.35;}
-  .calc-material-card b{font-family:var(--font-mono);font-size:12px;white-space:nowrap;}
+  .calc-material-main{min-width:0;}
+  .calc-material-values{display:grid;grid-template-columns:auto auto auto;gap:8px;align-items:center;text-align:right;}
+  .calc-material-values span,.calc-material-values b{font-family:var(--font-mono);font-size:11px;white-space:nowrap;}
+  .calc-material-values b{color:var(--text);font-size:12px;}
 
   /* Layer stack visual */
   .stack-wrap{display:flex;flex-direction:column;align-items:center;padding:10px 6px 4px;}
@@ -213,6 +223,8 @@
   .stat-card{background:var(--surface);border:1px solid var(--border-soft);border-radius:var(--radius);padding:16px 18px;}
   .stat-card .k{font-size:11px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;}
   .stat-card .v{font-family:var(--font-mono);font-size:21px;font-weight:600;}
+  .stat-card-main{background:var(--surface-2);border-color:var(--border);}
+  .stat-card-main .v{font-size:24px;color:var(--accent);}
   .stat-card .v.pos{color:var(--teal);}
   .stat-card .v.neg{color:var(--coral);}
   .history-list{min-width:980px;}
@@ -337,7 +349,9 @@
     .material-row-main{flex-direction:column;}
     .material-row-main>div{width:100%;min-width:0!important;}
     .calc-summary-grid{grid-template-columns:1fr;}
-    .calc-material-card{flex-direction:column;}
+    .calc-final-card strong{font-size:21px;}
+    .calc-material-card{grid-template-columns:1fr;}
+    .calc-material-values{grid-template-columns:1fr 1fr 1fr;text-align:left;}
     .page-head{align-items:flex-start;}
     .stat-card{padding:12px 13px;}
     .stat-card .v{font-size:18px;}
@@ -358,6 +372,8 @@
     .lote-summary{grid-template-columns:1fr;}
     .lote-actions{justify-content:flex-start;}
     .lote-edit-grid{grid-template-columns:1fr;}
+    .modal-bg{align-items:flex-start;padding:10px;}
+    .modal{max-height:calc(100vh - 20px);padding:16px;}
   }
   .sidebar-scrim{display:none;}
   @media (max-width:760px){
