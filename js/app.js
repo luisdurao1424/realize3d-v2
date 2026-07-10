@@ -870,12 +870,46 @@ function clearCalc(){
 /* ---------------------------------------------------------------
    RENDER: HISTÓRICO
 --------------------------------------------------------------- */
+function getPedidoStatusView(p){
+  if(p?.deleted === true) return {id:'lixo', label:'Lixo', cls:'badge-orc'};
+  if(p?.status === 'entregue' || p?.entregue === true) return {id:'entregue', label:'Entregue', cls:'badge-vend'};
+  if(p?.status === 'pago' || p?.pago === true || (p?.status === 'vendido' && p?.recebido !== null && p?.recebido !== undefined)){
+    return {id:'pago', label:'Pago', cls:'badge-vend'};
+  }
+  if(p?.status === 'vendido') return {id:'vendido', label:'Vendido', cls:'badge-vend'};
+  return {id:'orcamento', label:'Orçamento', cls:'badge-orc'};
+}
+
+function getPedidoCliente(p){
+  return p?.cliente || p?.customer || p?.nomeCliente || '';
+}
+
+function getPedidoGramasTotal(p){
+  return (p?.materiais||[]).reduce((s,m)=>s+(parseFloat(m.gramas)||0),0);
+}
+
+function getPedidoPrecoKgLabel(p){
+  const mats = getPedidoSnapshotMateriais(p);
+  const withPrice = mats.filter(m=>m.lotePrecoKg!==null && m.lotePrecoKg!==undefined);
+  if(withPrice.length>1) return 'vários';
+  if(withPrice.length===1) return `${fmtEUR(withPrice[0].lotePrecoKg)}/kg`;
+  const costs = getPedidoCostValues(p);
+  return costs.lotePrecoKg!=null ? `${fmtEUR(costs.lotePrecoKg)}/kg` : 'n/d';
+}
+
+function renderPedidoMetric(label, value, cls=''){
+  return `<div style="min-width:0;">
+    <div class="muted" style="font-size:11px;margin-bottom:3px;">${label}</div>
+    <div class="${cls}" style="font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${value}</div>
+  </div>`;
+}
+
 function pedidosFiltrados(){
   const showTrash = state.hist.status === 'lixo';
   let list = state.pedidos.filter(p=>showTrash ? p.deleted === true : p.deleted !== true);
   const s = state.hist.search.trim().toLowerCase();
-  if(s) list = list.filter(p => (p.projeto||'').toLowerCase().includes(s) || (p.materiais||[]).some(m=>(m.marca||'').toLowerCase().includes(s) || (m.cor||'').toLowerCase().includes(s)));
-  if(!showTrash && state.hist.status!=='todos') list = list.filter(p=>p.status===state.hist.status);
+  if(s) list = list.filter(p => (p.projeto||'').toLowerCase().includes(s) || getPedidoCliente(p).toLowerCase().includes(s) || (p.materiais||[]).some(m=>(m.marca||'').toLowerCase().includes(s) || (m.cor||'').toLowerCase().includes(s)));
+  if(!showTrash && state.hist.status!=='todos') list = list.filter(p=>getPedidoStatusView(p).id===state.hist.status);
   const sort = state.hist.sort;
   list.sort((a,b)=>{
     if(sort==='data_desc' || sort==='data_asc'){
@@ -925,7 +959,8 @@ function renderHist(){
       <select onchange="state.hist.status=this.value; renderHistTable();">
         <option value="todos" ${state.hist.status==='todos'?'selected':''}>Todos os estados</option>
         <option value="orcamento" ${state.hist.status==='orcamento'?'selected':''}>Orçamento</option>
-        <option value="vendido" ${state.hist.status==='vendido'?'selected':''}>Vendido</option>
+        <option value="vendido" ${state.hist.status==='vendido'?'selected':''}>Vendidos</option>
+        <option value="pago" ${state.hist.status==='pago'?'selected':''}>Pagos</option>
         <option value="lixo" ${state.hist.status==='lixo'?'selected':''}>Lixo</option>
       </select>
       <select onchange="state.hist.sort=this.value; renderHistTable();">
@@ -953,42 +988,52 @@ function renderHistTable(){
     return;
   }
   wrap.innerHTML = `
-    <table>
-      <thead><tr>
-        <th>Projeto</th><th>Filamento</th><th class="num">Gramas</th><th class="num">Tempo</th>
-        <th class="num">Custo</th><th class="num">Venda sug.</th><th class="num">Recebido</th><th class="num">Lucro</th><th>Estado</th><th></th>
-      </tr></thead>
-      <tbody>
-        ${list.map(p=>{
-          const costs = getPedidoCostValues(p);
-          const lucro = p.recebido!==null ? (p.recebido - costs.custoFinal) : null;
-          return `<tr>
-            <td>${escapeHtml(p.projeto)}${p.data?`<div class="muted" style="font-size:11px;">${fmtDate(p.data)}</div>`:''}</td>
-            <td class="muted">${(p.materiais||[]).map(m=>escapeHtml(m.marca)+' · '+escapeHtml(m.cor)).join('<br>')}${pedidoLoteSummaryHtml(p)}</td>
-            <td class="num">${fmtNum((p.materiais||[]).reduce((s,m)=>s+(m.gramas||0),0))}g</td>
-            <td class="num">${fmtNum(p.horas)}h</td>
-            <td class="num">${fmtEUR(costs.custoFinal)}</td>
-            <td class="num">${fmtEUR(costs.precoVenda)}</td>
-            <td class="num">${p.recebido!==null?fmtEUR(p.recebido):'—'}</td>
-            <td class="num" style="color:${lucro===null?'var(--text-faint)':(lucro>=0?'var(--teal)':'var(--coral)')};">${lucro===null?'—':fmtEUR(lucro)}</td>
-            <td>${p.status==='vendido'?`<span class="badge badge-vend">Vendido</span>`:`<span class="badge badge-orc">Orçamento</span>`}</td>
-            <td>
-              <div class="row-actions">
-                ${showTrash ? `
-                  <button class="btn btn-ghost btn-sm" title="Restaurar" onclick="restorePedidoFromTrash('${p.id}')">${ICONS.check} Restaurar</button>
-                  <button class="btn btn-danger btn-sm" title="Eliminar definitivamente" onclick="confirmPermanentDeletePedido('${p.id}')">${ICONS.trash} Eliminar definitivamente</button>
-                ` : `
-                  ${p.status==='orcamento' ? `<button class="icon-btn" title="Marcar vendido" onclick="openVendaModal('${p.id}')">${ICONS.euro}</button>` : ''}
-                  <button class="icon-btn" title="Duplicar" onclick="openDuplicateModal('${p.id}')">${ICONS.copy}</button>
-                  <button class="icon-btn" title="Editar" onclick="openEditPedidoModal('${p.id}')">${ICONS.edit}</button>
-                  <button class="icon-btn danger" title="Eliminar" onclick="confirmDeletePedido('${p.id}')">${ICONS.trash}</button>
-                `}
+    <div style="display:grid;gap:0;">
+      ${list.map(p=>{
+        const costs = getPedidoCostValues(p);
+        const status = getPedidoStatusView(p);
+        const cliente = getPedidoCliente(p);
+        const hasRecebido = p.recebido !== null && p.recebido !== undefined;
+        const lucro = hasRecebido ? (p.recebido - costs.custoFinal) : null;
+        const lucroCls = lucro===null ? '' : (lucro>=0 ? 'pos' : 'neg');
+        const materiais = (p.materiais||[]).map(m=>escapeHtml(m.marca)+' · '+escapeHtml(m.cor)).join('<br>');
+        return `<article style="padding:14px 16px;border-bottom:1px solid var(--border-soft);">
+          <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+            <div style="min-width:220px;flex:1;">
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <strong style="font-size:14px;">${escapeHtml(p.projeto || 'Pedido sem nome')}</strong>
+                <span class="badge ${status.cls}">${status.label}</span>
               </div>
-            </td>
-          </tr>`;
-        }).join('')}
-      </tbody>
-    </table>
+              <div class="muted" style="font-size:11px;margin-top:4px;line-height:1.35;">
+                ${cliente ? `Cliente: ${escapeHtml(cliente)} · ` : ''}${p.data ? fmtDate(p.data) : 'Sem data'}
+                ${materiais ? `<br>${materiais}` : ''}
+              </div>
+              ${pedidoLoteSummaryHtml(p)}
+            </div>
+            <div class="row-actions" style="justify-content:flex-end;">
+              ${showTrash ? `
+                <button class="btn btn-ghost btn-sm" title="Restaurar" onclick="restorePedidoFromTrash('${p.id}')">${ICONS.check} Restaurar</button>
+                <button class="btn btn-danger btn-sm" title="Eliminar definitivamente" onclick="confirmPermanentDeletePedido('${p.id}')">${ICONS.trash} Eliminar definitivamente</button>
+              ` : `
+                ${p.status==='orcamento' ? `<button class="btn btn-ghost btn-sm" title="Marcar vendido" onclick="openVendaModal('${p.id}')">${ICONS.euro} Vender</button>` : ''}
+                <button class="btn btn-ghost btn-sm" title="Duplicar" onclick="openDuplicateModal('${p.id}')">${ICONS.copy} Duplicar</button>
+                <button class="btn btn-ghost btn-sm" title="Editar" onclick="openEditPedidoModal('${p.id}')">${ICONS.edit} Editar</button>
+                <button class="btn btn-danger btn-sm" title="Eliminar" onclick="confirmDeletePedido('${p.id}')">${ICONS.trash} Eliminar</button>
+              `}
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(108px,1fr));gap:12px;margin-top:14px;">
+            ${renderPedidoMetric('Gramas', `${fmtNum(getPedidoGramasTotal(p))}g`)}
+            ${renderPedidoMetric('Tempo', `${fmtNum(p.horas)}h`)}
+            ${renderPedidoMetric('Lote/preço', getPedidoPrecoKgLabel(p))}
+            ${renderPedidoMetric('Custo total', fmtEUR(costs.custoFinal))}
+            ${renderPedidoMetric('Preço de venda', fmtEUR(costs.precoVenda))}
+            ${renderPedidoMetric('Recebido', hasRecebido ? fmtEUR(p.recebido) : '—')}
+            ${renderPedidoMetric('Lucro', lucro===null ? '—' : fmtEUR(lucro), lucroCls)}
+          </div>
+        </article>`;
+      }).join('')}
+    </div>
   `;
 }
 
