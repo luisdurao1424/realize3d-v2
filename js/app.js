@@ -871,10 +871,11 @@ function clearCalc(){
    RENDER: HISTÓRICO
 --------------------------------------------------------------- */
 function pedidosFiltrados(){
-  let list = [...state.pedidos];
+  const showTrash = state.hist.status === 'lixo';
+  let list = state.pedidos.filter(p=>showTrash ? p.deleted === true : p.deleted !== true);
   const s = state.hist.search.trim().toLowerCase();
   if(s) list = list.filter(p => (p.projeto||'').toLowerCase().includes(s) || (p.materiais||[]).some(m=>(m.marca||'').toLowerCase().includes(s) || (m.cor||'').toLowerCase().includes(s)));
-  if(state.hist.status!=='todos') list = list.filter(p=>p.status===state.hist.status);
+  if(!showTrash && state.hist.status!=='todos') list = list.filter(p=>p.status===state.hist.status);
   const sort = state.hist.sort;
   list.sort((a,b)=>{
     if(sort==='data_desc' || sort==='data_asc'){
@@ -897,7 +898,7 @@ function pedidosFiltrados(){
 
 function renderHist(){
   const list = pedidosFiltrados();
-  const all = state.pedidos;
+  const all = state.pedidos.filter(p=>p.deleted !== true);
   const totalCusto = all.reduce((s,p)=>s+getPedidoCostValues(p).custoFinal,0);
   const totalRecebido = all.filter(p=>p.recebido!==null).reduce((s,p)=>s+p.recebido,0);
   const totalLucro = all.filter(p=>p.recebido!==null).reduce((s,p)=>s+(p.recebido-getPedidoCostValues(p).custoFinal),0);
@@ -925,6 +926,7 @@ function renderHist(){
         <option value="todos" ${state.hist.status==='todos'?'selected':''}>Todos os estados</option>
         <option value="orcamento" ${state.hist.status==='orcamento'?'selected':''}>Orçamento</option>
         <option value="vendido" ${state.hist.status==='vendido'?'selected':''}>Vendido</option>
+        <option value="lixo" ${state.hist.status==='lixo'?'selected':''}>Lixo</option>
       </select>
       <select onchange="state.hist.sort=this.value; renderHistTable();">
         <option value="data_desc" ${state.hist.sort==='data_desc'?'selected':''}>Mais recentes</option>
@@ -945,8 +947,9 @@ function renderHistTable(){
   const wrap = document.getElementById('histTableWrap');
   if(!wrap) return;
   const list = pedidosFiltrados();
+  const showTrash = state.hist.status === 'lixo';
   if(list.length===0){
-    wrap.innerHTML = `<div class="empty-state">${ICONS.box}<p>Sem registos para mostrar.</p><p style="font-size:12px;">Cria uma nova impressão na Calculadora.</p></div>`;
+    wrap.innerHTML = `<div class="empty-state">${ICONS.box}<p>Sem registos para mostrar.</p><p style="font-size:12px;">${showTrash?'O lixo está vazio.':'Cria uma nova impressão na Calculadora.'}</p></div>`;
     return;
   }
   wrap.innerHTML = `
@@ -971,10 +974,15 @@ function renderHistTable(){
             <td>${p.status==='vendido'?`<span class="badge badge-vend">Vendido</span>`:`<span class="badge badge-orc">Orçamento</span>`}</td>
             <td>
               <div class="row-actions">
-                ${p.status==='orcamento' ? `<button class="icon-btn" title="Marcar vendido" onclick="openVendaModal('${p.id}')">${ICONS.euro}</button>` : ''}
-                <button class="icon-btn" title="Duplicar" onclick="openDuplicateModal('${p.id}')">${ICONS.copy}</button>
-                <button class="icon-btn" title="Editar" onclick="openEditPedidoModal('${p.id}')">${ICONS.edit}</button>
-                <button class="icon-btn danger" title="Eliminar" onclick="confirmDeletePedido('${p.id}')">${ICONS.trash}</button>
+                ${showTrash ? `
+                  <button class="icon-btn" title="Restaurar" onclick="restorePedidoFromTrash('${p.id}')">${ICONS.check}</button>
+                  <button class="icon-btn danger" title="Eliminar definitivamente" onclick="confirmPermanentDeletePedido('${p.id}')">${ICONS.trash}</button>
+                ` : `
+                  ${p.status==='orcamento' ? `<button class="icon-btn" title="Marcar vendido" onclick="openVendaModal('${p.id}')">${ICONS.euro}</button>` : ''}
+                  <button class="icon-btn" title="Duplicar" onclick="openDuplicateModal('${p.id}')">${ICONS.copy}</button>
+                  <button class="icon-btn" title="Editar" onclick="openEditPedidoModal('${p.id}')">${ICONS.edit}</button>
+                  <button class="icon-btn danger" title="Eliminar" onclick="confirmDeletePedido('${p.id}')">${ICONS.trash}</button>
+                `}
               </div>
             </td>
           </tr>`;
@@ -986,7 +994,7 @@ function renderHistTable(){
 
 function exportCSV(){
   const headers = ['Projeto','Materiais','GramasTotal','Horas','Addons','CustoFilamento','CustoEletricidade','CustoFinal','PrecoVendaSugerido','Recebido','Lucro','Estado','Data'];
-  const rows = state.pedidos.map(p=>{
+  const rows = state.pedidos.filter(p=>p.deleted !== true).map(p=>{
     const costs = getPedidoCostValues(p);
     return [
       p.projeto,
@@ -1030,12 +1038,43 @@ function confirmDeletePedido(id){
   state.modal = {type:'deletePedido', id, nome:p.projeto};
   render();
 }
+async function movePedidoToTrash(pedidoId){
+  const p = state.pedidos.find(x=>x.id===pedidoId);
+  if(!p) return;
+  p.deleted = true;
+  p.deletedAt = new Date().toISOString();
+  if (window.AutoSave) window.AutoSave.schedule();
+  await savePedidos();
+}
 async function doDeletePedido(id){
-  state.pedidos = state.pedidos.filter(p=>p.id!==id);
+  await movePedidoToTrash(id);
+  closeModal();
+  toast('Registo movido para o lixo');
+  render();
+}
+async function restorePedidoFromTrash(pedidoId){
+  const p = state.pedidos.find(x=>x.id===pedidoId);
+  if(!p) return;
+  delete p.deleted;
+  delete p.deletedAt;
+  if (window.AutoSave) window.AutoSave.schedule();
+  await savePedidos();
+  toast('Registo restaurado');
+  render();
+}
+function confirmPermanentDeletePedido(id){
+  const p = state.pedidos.find(x=>x.id===id);
+  if(!p) return;
+  state.modal = {type:'permanentDeletePedido', id, nome:p.projeto};
+  render();
+}
+async function permanentlyDeletePedido(pedidoId){
+  state.pedidos = state.pedidos.filter(p=>p.id!==pedidoId);
   if (window.AutoSave) window.AutoSave.schedule();
   await savePedidos();
   closeModal();
-  toast('Registo eliminado');
+  toast('Registo eliminado definitivamente');
+  render();
 }
 function openDuplicateModal(id){
   const p = state.pedidos.find(x=>x.id===id);
@@ -1538,9 +1577,15 @@ function renderModal(){
     ]);
   }
   if(m.type==='deletePedido'){
-    return modalWrap('Eliminar registo', `<p style="color:var(--text-dim);font-size:13.5px;">Tens a certeza que queres eliminar o registo de <b>${escapeHtml(m.nome)}</b> do histórico?</p>`, [
+    return modalWrap('Mover para o lixo', `<p style="color:var(--text-dim);font-size:13.5px;">Tens a certeza que queres mover o registo de <b>${escapeHtml(m.nome)}</b> para o lixo?</p>`, [
       {label:'Cancelar', cls:'btn-ghost', action:'closeModal()'},
-      {label:'Eliminar', cls:'btn-danger', action:`doDeletePedido('${m.id}')`}
+      {label:'Mover para o lixo', cls:'btn-danger', action:`doDeletePedido('${m.id}')`}
+    ]);
+  }
+  if(m.type==='permanentDeletePedido'){
+    return modalWrap('Eliminar definitivamente', `<p style="color:var(--text-dim);font-size:13.5px;">Tens a certeza que queres eliminar definitivamente <b>${escapeHtml(m.nome)}</b>? Esta ação não pode ser anulada.</p>`, [
+      {label:'Cancelar', cls:'btn-ghost', action:'closeModal()'},
+      {label:'Eliminar definitivamente', cls:'btn-danger', action:`permanentlyDeletePedido('${m.id}')`}
     ]);
   }
   if(m.type==='duplicatePedido'){
@@ -1796,7 +1841,10 @@ function render(){
     setLoteAtivo,
     addLoteFilamento,
     updateLoteFilamento,
-    archiveLoteFilamento
+    archiveLoteFilamento,
+    movePedidoToTrash,
+    restorePedidoFromTrash,
+    permanentlyDeletePedido
   });
   const store = await import(new URL('core/store.js', appSrc).href);
   syncStoreState();
