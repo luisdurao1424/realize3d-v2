@@ -183,7 +183,7 @@ async function loadAll(){
     console.log('Workspace: parâmetro URL encontrado');
     console.log('Workspace: abertura por URL iniciada');
   }
-  workspaceCode = urlWorkspace || lsGet('workspace');
+  workspaceCode = urlWorkspace || getLastWorkspace() || lsGet('workspace');
   if(!workspaceCode){
     return false;
   }
@@ -193,10 +193,10 @@ async function loadAll(){
     applyPayload(cached ? JSON.parse(cached) : defaultPayload());
     setSyncStatus('offline');
     if(urlWorkspace){
-      lsSet('workspace', workspaceCode);
-      setLastWorkspace(workspaceCode);
       console.log('Workspace: abertura por URL concluída');
     }
+    lsSet('workspace', workspaceCode);
+    setLastWorkspace(workspaceCode);
     return true;
   }
   try{
@@ -206,9 +206,9 @@ async function loadAll(){
     applyPayload(data.payload || {});
     lsSet('cache_payload', JSON.stringify(data.payload || {}));
     setSyncStatus('ok');
+    lsSet('workspace', workspaceCode);
+    setLastWorkspace(workspaceCode);
     if(urlWorkspace){
-      lsSet('workspace', workspaceCode);
-      setLastWorkspace(workspaceCode);
       console.log('Workspace: abertura por URL concluída');
     }
   }catch(e){
