@@ -361,17 +361,20 @@ function getLoteSnapshot(filamento){
 
 function buildPedidoMaterialSnapshot(m){
   const snap = m.loteSnapshot || {};
+  const precoKg = parseFloat(m.precoKg)||0;
+  const gramas = parseFloat(m.gramas)||0;
   return {
     marca:m.marca,
     cor:m.cor,
-    gramas:m.gramas,
-    precoKg:m.precoKg,
+    gramas,
+    precoKg,
     filamentoId:snap.filamentoId || m.filamentoId || null,
     loteId:snap.loteId || null,
     loteNome:snap.loteNome || '',
-    lotePrecoKg:snap.lotePrecoKg || null,
+    lotePrecoKg:snap.lotePrecoKg ?? precoKg,
     loteFornecedor:snap.loteFornecedor || '',
     loteData:snap.loteData || '',
+    custoFilamento:(gramas * precoKg)/1000,
     loteSnapshot:snap.loteId ? {...snap} : null
   };
 }
