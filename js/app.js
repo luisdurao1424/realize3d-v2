@@ -82,14 +82,31 @@ let state = {
   config: DEFAULT_CONFIG,
   filamentos: [],
   pedidos: [],
-  calc: {projeto:'', materiais:[{id:'m0', filKey:'', gramas:''}], horas:'', addons:'', taxaFalhas:null, margemLucro:null},
+  calc: {projeto:'', materiais:[{id:'m0', filKey:'', gramas:''}], horas:'', addons:'', addOns:[{id:'a0', nome:'', valor:''}], taxaFalhas:null, margemLucro:null},
   hist: {search:'', status:'todos', sort:'data_desc'},
+  fil: {search:'', material:'todos', status:'ativos', sort:'recentes'},
+  shipping: {service:'normal', weight:'', cod:false, codAmount:'', receipt:false, electronic:false, own:false, vatRate:0.23},
   modal: null, // {type, data}
   sidebarOpen:false,
 };
+let shippingModule = null;
 
 function uid(){ return Math.random().toString(36).slice(2,10) + Date.now().toString(36).slice(-4); }
 function filKey(marca,cor){ return (marca||'')+'__'+(cor||''); }
+function filamentSelectKey(filamento){ return filamento?.id ? `id:${filamento.id}` : filKey(filamento?.marca, filamento?.cor); }
+function findFilamentByKey(key){
+  if(!key) return null;
+  if(String(key).startsWith('id:')) return state.filamentos.find(f=>f.id===String(key).slice(3)) || null;
+  return state.filamentos.find(f=>filKey(f.marca,f.cor)===key && !f.arquivado) ||
+    state.filamentos.find(f=>filKey(f.marca,f.cor)===key) || null;
+}
+function savedMaterialFilamentKey(material){
+  const byId = material?.filamentoId ? state.filamentos.find(f=>f.id===material.filamentoId) : null;
+  if(byId) return filamentSelectKey(byId);
+  const match = state.filamentos.find(f=>f.marca===material?.marca && f.cor===material?.cor && !f.arquivado) ||
+    state.filamentos.find(f=>f.marca===material?.marca && f.cor===material?.cor);
+  return match ? filamentSelectKey(match) : filKey(material?.marca, material?.cor);
+}
 
 /* ---------------------------------------------------------------
    SUPABASE CONFIG
@@ -329,6 +346,30 @@ function getLoteAtivoCalculo(filamento){
   return filamento.lotes.find(l=>l && l.ativo && !l.arquivado) || null;
 }
 
+function getFilamentReferenceLote(filamento){
+  if(!filamento || !Array.isArray(filamento.lotes)) return null;
+  return getLoteAtivoCalculo(filamento) || filamento.lotes.find(l=>l && !l.arquivado) || filamento.lotes[0] || null;
+}
+
+function getFilamentPurchaseDate(filamento){
+  return filamento?.dataCompra || getFilamentReferenceLote(filamento)?.data || '';
+}
+
+function getFilamentSupplier(filamento){
+  return filamento?.fornecedor || getFilamentReferenceLote(filamento)?.fornecedor || '';
+}
+
+function getFilamentPurchasePrice(filamento){
+  const spool = parseFloat(filamento?.spool)||1;
+  const explicitPurchase = parseFloat(filamento?.precoCompra ?? filamento?.precoBobina);
+  if(!isNaN(explicitPurchase) && explicitPurchase>0) return explicitPurchase;
+  const legacyPrice = parseFloat(filamento?.preco ?? filamento?.price);
+  if((filamento?.dataCompra || filamento?.fornecedor) && !isNaN(legacyPrice) && legacyPrice>0) return legacyPrice;
+  const referencePrice = parseFloat(getFilamentReferenceLote(filamento)?.precoKg);
+  if(!isNaN(referencePrice) && referencePrice>0) return referencePrice * spool;
+  return !isNaN(legacyPrice) && legacyPrice>0 ? legacyPrice : 0;
+}
+
 function getPrecoKgFilamento(filamento){
   const lote = getLoteAtivoCalculo(filamento);
   const precoKg = lote ? parseFloat(lote.precoKg) : NaN;
@@ -365,6 +406,7 @@ function buildPedidoMaterialSnapshot(m){
   const gramas = parseFloat(m.gramas)||0;
   return {
     marca:m.marca,
+    tipo:m.tipo || '',
     cor:m.cor,
     gramas,
     precoKg,
@@ -379,7 +421,45 @@ function buildPedidoMaterialSnapshot(m){
   };
 }
 
-function buildCostSnapshot({materiais, horas, addons, taxaFalhas, margemLucro, breakdown}){
+function normalizeAddOns(addOns, legacyTotal=0){
+  if(Array.isArray(addOns) && addOns.length>0){
+    return addOns.map(addOn=>({
+      id:addOn.id || uid(),
+      nome:String(addOn.nome || ''),
+      valor:addOn.valor ?? ''
+    }));
+  }
+  const total = parseFloat(legacyTotal)||0;
+  return [{id:uid(), nome:total>0 ? 'Outros' : '', valor:total>0 ? total : ''}];
+}
+
+function getStoredAddOns(addOns, legacyTotal=0){
+  return normalizeAddOns(addOns, legacyTotal)
+    .map(addOn=>({nome:String(addOn.nome || '').trim(), valor:parseFloat(addOn.valor)||0}))
+    .filter(addOn=>addOn.valor>0);
+}
+
+function getAddOnsTotal(addOns, legacyTotal=0){
+  if(!Array.isArray(addOns)) return parseFloat(legacyTotal)||0;
+  return addOns.reduce((sum, addOn)=>sum+(parseFloat(addOn.valor)||0), 0);
+}
+
+function getPedidoAddOns(pedido){
+  const snap = pedido?.costSnapshot;
+  return getStoredAddOns(pedido?.addOns || snap?.addOns, snap?.addons ?? pedido?.addons);
+}
+
+function validateAddOns(addOns){
+  for(const addOn of addOns || []){
+    const raw = String(addOn.valor ?? '').trim();
+    const valor = parseFloat(raw);
+    if(raw && (isNaN(valor) || valor<0)) return 'Indica um valor válido para cada add-on';
+    if(valor>0 && !String(addOn.nome || '').trim()) return 'Indica a descrição de cada add-on';
+  }
+  return '';
+}
+
+function buildCostSnapshot({materiais, horas, addons, addOns, taxaFalhas, margemLucro, breakdown}){
   const mats = materiais || [];
   const first = mats[0] || {};
   // Snapshots preserve historical cost values and must not be recalculated when filament lot prices change.
@@ -393,6 +473,7 @@ function buildCostSnapshot({materiais, horas, addons, taxaFalhas, margemLucro, b
     gramas:mats.reduce((s,m)=>s+(parseFloat(m.gramas)||0),0),
     horas:parseFloat(horas)||0,
     addons:parseFloat(addons)||0,
+    addOns:getStoredAddOns(addOns, addons),
     custoFilamento:breakdown.custoFilamento,
     custoEletricidade:breakdown.custoEletricidade,
     custoTotal:breakdown.custoFinal,
@@ -412,6 +493,7 @@ function buildCostSnapshot({materiais, horas, addons, taxaFalhas, margemLucro, b
       loteFornecedor:m.loteFornecedor || '',
       loteData:m.loteData || '',
       marca:m.marca,
+      tipo:m.tipo || '',
       cor:m.cor,
       gramas:m.gramas,
       precoKg:m.precoKg,
@@ -450,6 +532,7 @@ function getPedidoSnapshotMateriais(p){
   if(Array.isArray(snap.materiais) && snap.materiais.length>0) return snap.materiais;
   return [{
     marca:(p.materiais||[])[0]?.marca || '',
+    tipo:(p.materiais||[])[0]?.tipo || '',
     cor:(p.materiais||[])[0]?.cor || '',
     loteNome:snap.loteNome || '',
     lotePrecoKg:snap.lotePrecoKg,
@@ -461,35 +544,33 @@ function getPedidoSnapshotMateriais(p){
 }
 
 function pedidoLoteSummaryHtml(p){
-  if(!p?.costSnapshot) return `<div class="muted" style="font-size:11px;margin-top:4px;">Lote: não registado</div>`;
+  if(!p?.costSnapshot) return `<div class="muted" style="font-size:11px;margin-top:4px;">Bobina: não registada</div>`;
   const mats = getPedidoSnapshotMateriais(p);
-  if(mats.length===0) return `<div class="muted" style="font-size:11px;margin-top:4px;">Lote: não registado</div>`;
+  if(mats.length===0) return `<div class="muted" style="font-size:11px;margin-top:4px;">Bobina: não registada</div>`;
   return `<div class="muted" style="font-size:11px;margin-top:4px;line-height:1.35;">${mats.map(m=>{
-    const nome = m.loteNome || 'Lote sem nome';
     const preco = m.lotePrecoKg!=null ? fmtEUR(m.lotePrecoKg) + '/kg' : 'preço n/d';
-    const fil = [m.marca, m.cor].filter(Boolean).join(' · ');
-    const detalhe = mats.length>1 && fil ? `${escapeHtml(fil)}: ` : 'Lote: ';
+    const fil = [m.marca, m.tipo, m.cor].filter(Boolean).join(' · ');
+    const detalhe = mats.length>1 && fil ? `${escapeHtml(fil)}: ` : 'Bobina: ';
     const grams = m.gramas!=null ? ` · ${fmtNum(m.gramas)}g` : '';
     const custo = m.custoFilamento!=null ? ` · ${fmtEUR(m.custoFilamento)}` : '';
-    return `${detalhe}${escapeHtml(nome)} · ${preco}${grams}${custo}`;
+    return `${detalhe}${preco}${grams}${custo}`;
   }).join('<br>')}</div>`;
 }
 
 function pedidoLoteDetailHtml(p){
-  if(!p?.costSnapshot) return `<div class="hint">Lote: não registado</div>`;
+  if(!p?.costSnapshot) return `<div class="hint">Bobina: não registada</div>`;
   const mats = getPedidoSnapshotMateriais(p);
   const costs = getPedidoCostValues(p);
   return `<div class="field">
-    <label>Lote usado</label>
+    <label>Bobina usada</label>
     <div class="hint" style="line-height:1.45;">
       ${mats.map(m=>{
-        const fil = [m.marca, m.cor].filter(Boolean).join(' · ');
-        const nome = m.loteNome || 'Lote sem nome';
+        const fil = [m.marca, m.tipo, m.cor].filter(Boolean).join(' · ');
         const fornecedor = m.loteFornecedor || 'n/d';
         const data = m.loteData ? fmtDate(m.loteData) : 'n/d';
         const preco = m.lotePrecoKg!=null ? fmtEUR(m.lotePrecoKg) + '/kg' : 'Preço n/d';
         const custo = m.custoFilamento!=null ? fmtEUR(m.custoFilamento) : fmtEUR(costs.custoFilamento);
-        return `${fil ? escapeHtml(fil) + '<br>' : ''}Lote: ${escapeHtml(nome)}<br>Fornecedor: ${escapeHtml(fornecedor)} · Data: ${data}<br>Preço usado: ${preco} · Custo do filamento: ${custo}`;
+        return `${fil ? escapeHtml(fil) + '<br>' : ''}Fornecedor: ${escapeHtml(fornecedor)} · Compra: ${data}<br>Preço usado: ${preco} · Custo do filamento: ${custo}`;
       }).join('<br><br>')}
     </div>
   </div>`;
@@ -498,7 +579,7 @@ function pedidoLoteDetailHtml(p){
 function sameCostInputs(p, form){
   const sameNumber = (a,b)=> (parseFloat(a)||0) === (parseFloat(b)||0);
   const prev = (p.materiais||[]).map(m=>({
-    filKey:filKey(m.marca,m.cor),
+    filKey:savedMaterialFilamentKey(m),
     gramas:parseFloat(m.gramas)||0
   }));
   const next = (form.materiais||[]).map(m=>({
@@ -511,7 +592,7 @@ function sameCostInputs(p, form){
     if(prev[i].gramas !== next[i].gramas) return false;
   }
   if(!sameNumber(p.horas, form.horas)) return false;
-  if(!sameNumber(p.addons, form.addons)) return false;
+  if(!sameNumber(p.costSnapshot?.addons ?? p.addons, getAddOnsTotal(form.addOns, form.addons))) return false;
   if('taxaFalhas' in form && !sameNumber(p.taxaFalhas, form.taxaFalhas)) return false;
   if('bufferFalhas' in form && !sameNumber(p.bufferFalhas, form.bufferFalhas)) return false;
   if('margemLucro' in form && !sameNumber(p.margemLucro, form.margemLucro)) return false;
@@ -625,6 +706,7 @@ const NAV = [
   {id:'calc', label:'Calculadora', icon:'calc'},
   {id:'hist', label:'Histórico', icon:'hist'},
   {id:'fil', label:'Filamentos', icon:'fil'},
+  {id:'ship', label:'Envios', icon:'box'},
   {id:'cfg', label:'Definições', icon:'cfg'},
 ];
 
@@ -650,7 +732,7 @@ function renderSidebar(){
     ${workspaceCode ? `<div class="workspace-code-chip" style="margin-bottom:10px;"><span>${escapeHtml(workspaceCode)}</span><button onclick="copyWorkspaceCode()" title="Copiar código">${ICONS.copy}</button><button onclick="copyWorkspaceLink()" title="Copiar link direto">${ICONS.copy}</button></div>` : ''}
     <div class="stat"><span>impressões registadas</span><b>${totalPedidos}</b></div>
     <div class="stat"><span>vendidas</span><b>${vendidos}</b></div>
-    <div class="stat"><span>filamentos na base</span><b>${state.filamentos.length}</b></div>
+    <div class="stat"><span>bobinas em uso</span><b>${state.filamentos.filter(f=>!f.arquivado).length}</b></div>
   `;
 }
 
@@ -658,16 +740,22 @@ function renderSidebar(){
    RENDER: CALCULADORA
 --------------------------------------------------------------- */
 function filamentOptions(selectedKey){
-  const sorted = [...state.filamentos].sort((a,b)=> (a.marca+a.cor).localeCompare(b.marca+b.cor));
+  const sorted = [...state.filamentos]
+    .filter(f=>!f.arquivado || filamentSelectKey(f)===selectedKey || filKey(f.marca,f.cor)===selectedKey)
+    .sort((a,b)=> (a.marca+(a.tipo||a.material||'')+a.cor).localeCompare(b.marca+(b.tipo||b.material||'')+b.cor));
   return sorted.map(f=>{
-    const k = filKey(f.marca,f.cor);
+    const k = filamentSelectKey(f);
     const pk = getPrecoKg(f);
-    return `<option value="${escapeHtml(k)}" ${k===selectedKey?'selected':''}>${escapeHtml(f.marca)} — ${escapeHtml(f.cor)} (${fmtEUR(pk)}/kg)</option>`;
+    const tipo = f.tipo || f.material || 'Tipo n/d';
+    const data = getFilamentPurchaseDate(f);
+    const archived = f.arquivado ? ' · Arquivada' : '';
+    return `<option value="${escapeHtml(k)}" ${k===selectedKey?'selected':''}>${escapeHtml(f.marca)} — ${escapeHtml(tipo)} — ${escapeHtml(f.cor)} · ${fmtEUR(pk)}/kg${data ? ` · ${fmtDate(data)}` : ''}${archived}</option>`;
   }).join('');
 }
 
 function renderCalc(){
   const c = state.calc;
+  c.addOns = normalizeAddOns(c.addOns, c.addons);
   const taxaDefault = state.config.taxaFalhas*100;
   const lucroDefault = state.config.margemLucro*100;
   return `
@@ -708,7 +796,10 @@ function renderCalc(){
           <h3>Custos adicionais</h3>
           <div class="field">
             <label>Add-ons / extras (ímanes, parafusos, embalagem…)</label>
-            <div class="unit-input"><input type="number" min="0" step="any" id="in_addons" placeholder="0.00" value="${c.addons}" oninput="state.calc.addons=this.value; updateCalcPreview();"><span>€</span></div>
+            <div id="addOnRows">
+              ${c.addOns.map(addOn=>addOnRowHtml(addOn,'calc',c.addOns.length>1)).join('')}
+            </div>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="calcAddAddOn()">${ICONS.plus} Adicionar add-on</button>
           </div>
           <div class="field">
             <label>Taxa de falhas</label>
@@ -742,11 +833,11 @@ function renderCalc(){
 
 function resolveMateriais(materiais){
   return (materiais||[]).map(m=>{
-    const fil = state.filamentos.find(f=>filKey(f.marca,f.cor)===m.filKey);
+    const fil = findFilamentByKey(m.filKey);
     return {
       id:m.id, filKey:m.filKey,
       filamentoId: fil?fil.id:null,
-      marca: fil?fil.marca:null, cor: fil?fil.cor:null,
+      marca: fil?fil.marca:null, tipo:fil?(fil.tipo||fil.material||''):null, cor: fil?fil.cor:null,
       gramas: parseFloat(m.gramas)||0,
       precoKg: fil?getPrecoKg(fil):0,
       loteSnapshot: fil?getLoteSnapshot(fil):null
@@ -757,7 +848,7 @@ function resolveMateriais(materiais){
 function materialRowHtml(m, ctx, canRemove){
   const updateFn = ctx==='calc' ? 'calcUpdateMaterial' : 'modalUpdateMaterial';
   const removeFn = ctx==='calc' ? 'calcRemoveMaterial' : 'modalRemoveMaterial';
-  const fil = state.filamentos.find(f=>filKey(f.marca,f.cor)===m.filKey);
+  const fil = findFilamentByKey(m.filKey);
   const lote = fil ? getLoteAtivoCalculo(fil) : null;
   const preco = fil ? getPrecoKg(fil) : 0;
   return `<div class="material-row">
@@ -767,7 +858,7 @@ function materialRowHtml(m, ctx, canRemove){
           <option value="">— escolher filamento —</option>
           ${filamentOptions(m.filKey)}
         </select>
-        ${fil ? `<div class="material-meta">${escapeHtml(lote?.nome || 'Sem lote ativo')} · ${fmtEUR(preco)}/kg</div>` : ''}
+        ${fil ? `<div class="material-meta">Bobina${getFilamentPurchaseDate(fil) ? ` de ${fmtDate(getFilamentPurchaseDate(fil))}` : ''}${getFilamentSupplier(fil) ? ` · ${escapeHtml(getFilamentSupplier(fil))}` : ''} · ${fmtEUR(preco)}/kg</div>` : ''}
       </div>
       <div style="flex:1;min-width:110px;">
         <div class="unit-input"><input type="number" min="0" step="any" placeholder="0" value="${m.gramas}" oninput="${updateFn}('${m.id}','gramas',this.value)"><span>g</span></div>
@@ -801,12 +892,49 @@ function modalUpdateMaterial(id, field, value){
   if(m) m[field] = value;
 }
 
+function addOnRowHtml(addOn, ctx, canRemove){
+  const updateFn = ctx==='calc' ? 'calcUpdateAddOn' : 'modalUpdateAddOn';
+  const removeFn = ctx==='calc' ? 'calcRemoveAddOn' : 'modalRemoveAddOn';
+  return `<div class="addon-row">
+    <div class="addon-row-main">
+      <input class="addon-name" type="text" placeholder="Descrição (ex: íman)" value="${escapeHtml(addOn.nome)}" oninput="${updateFn}('${addOn.id}','nome',this.value)">
+      <div class="unit-input addon-value"><input type="number" min="0" step="any" placeholder="0.00" value="${addOn.valor}" oninput="${updateFn}('${addOn.id}','valor',this.value)"><span>€</span></div>
+      ${canRemove ? `<button type="button" class="icon-btn danger" title="Remover add-on" onclick="${removeFn}('${addOn.id}')">${ICONS.trash}</button>` : `<div class="addon-row-spacer"></div>`}
+    </div>
+  </div>`;
+}
+
+function calcAddAddOn(){ state.calc.addOns.push({id:uid(), nome:'', valor:''}); render(); }
+function calcRemoveAddOn(id){
+  state.calc.addOns = state.calc.addOns.filter(addOn=>addOn.id!==id);
+  if(state.calc.addOns.length===0) state.calc.addOns.push({id:uid(), nome:'', valor:''});
+  render();
+}
+function calcUpdateAddOn(id, field, value){
+  const addOn = state.calc.addOns.find(item=>item.id===id);
+  if(addOn) addOn[field] = value;
+  updateCalcPreview();
+}
+
+function modalAddAddOn(){ state.modal.form.addOns.push({id:uid(), nome:'', valor:''}); render(); }
+function modalRemoveAddOn(id){
+  state.modal.form.addOns = state.modal.form.addOns.filter(addOn=>addOn.id!==id);
+  if(state.modal.form.addOns.length===0) state.modal.form.addOns.push({id:uid(), nome:'', valor:''});
+  render();
+}
+function modalUpdateAddOn(id, field, value){
+  const addOn = state.modal.form.addOns.find(item=>item.id===id);
+  if(addOn) addOn[field] = value;
+}
+
 function currentCalcInputs(){
   const c = state.calc;
   const materiais = resolveMateriais(c.materiais);
+  const addOns = getStoredAddOns(c.addOns, c.addons);
+  const addons = getAddOnsTotal(c.addOns, c.addons);
   const taxaFalhas = (c.taxaFalhas===null || c.taxaFalhas==='') ? state.config.taxaFalhas : (parseFloat(c.taxaFalhas)/100);
   const margemLucro = (c.margemLucro===null || c.margemLucro==='') ? state.config.margemLucro : (parseFloat(c.margemLucro)/100);
-  return {materiais, horas:c.horas, addons:c.addons, taxaFalhas, margemLucro};
+  return {materiais, horas:c.horas, addons, addOns, taxaFalhas, margemLucro};
 }
 
 function layerHtml(label, value, total, color){
@@ -818,7 +946,7 @@ function layerHtml(label, value, total, color){
 }
 
 function updateCalcPreview(){
-  const {materiais,horas,addons,taxaFalhas,margemLucro} = currentCalcInputs();
+  const {materiais,horas,addons,addOns,taxaFalhas,margemLucro} = currentCalcInputs();
   const b = calcBreakdown({materiais,horas,addons,taxaFalhas,margemLucro});
   const total = b.precoVenda;
   const target = document.getElementById('calcPreview');
@@ -839,7 +967,7 @@ function updateCalcPreview(){
       <div class="calc-summary-card"><span>Custo filamento</span><b>${fmtEUR(b.custoFilamento)}</b></div>
       <div class="calc-summary-card"><span>Eletricidade</span><b>${fmtEUR(b.custoEletricidade)}</b></div>
       <div class="calc-summary-card"><span>Taxa de falhas</span><b>${fmtEUR(b.bufferFalhas)}</b></div>
-      <div class="calc-summary-card"><span>Addons</span><b>${fmtEUR(b.addons)}</b></div>
+      <div class="calc-summary-card"><span>Add-ons</span><b>${fmtEUR(b.addons)}</b></div>
       <div class="calc-summary-card"><span>Custo total</span><b>${fmtEUR(b.custoFinal)}</b></div>
       <div class="calc-summary-card highlight"><span>Preço sugerido</span><b>${fmtEUR(b.precoVenda)}</b></div>
       <div class="calc-summary-card"><span>Lucro estimado</span><b class="pos">${fmtEUR(b.lucroValor)}</b></div>
@@ -855,8 +983,8 @@ function updateCalcPreview(){
         const custo = (m.gramas*m.precoKg)/1000;
         return `<div class="calc-material-card">
           <div class="calc-material-main">
-            <strong>${escapeHtml(m.marca)} · ${escapeHtml(m.cor)}</strong>
-            <span>${lote?.loteNome || 'Sem lote ativo'}</span>
+            <strong>${[m.marca,m.tipo,m.cor].filter(Boolean).map(escapeHtml).join(' · ')}</strong>
+            <span>${lote?.loteFornecedor ? escapeHtml(lote.loteFornecedor) : 'Fornecedor n/d'}${lote?.loteData ? ` · ${fmtDate(lote.loteData)}` : ''}</span>
           </div>
           <div class="calc-material-values">
             <span>${fmtEUR(m.precoKg)}/kg</span>
@@ -866,6 +994,11 @@ function updateCalcPreview(){
         </div>`;
       }).join('')}
     </div>
+    ${addOns.length>0 ? `<div class="addon-preview-list">
+      <div class="addon-preview-title">Add-ons</div>
+      ${addOns.map(addOn=>`<div class="addon-preview-row"><span>${escapeHtml(addOn.nome || 'Add-on sem descrição')}</span><b>${fmtEUR(addOn.valor)}</b></div>`).join('')}
+      <div class="addon-preview-row total"><span>Total</span><b>${fmtEUR(b.addons)}</b></div>
+    </div>` : ''}
     <div class="stack-wrap">
       <div class="stack">
         ${layerHtml('Lucro', b.lucroValor, total, 'var(--teal)')}
@@ -893,7 +1026,9 @@ function updateCalcPreview(){
 
 async function saveCalcToHistory(){
   const c = state.calc;
-  const {materiais,horas,addons,taxaFalhas,margemLucro} = currentCalcInputs();
+  const addOnError = validateAddOns(c.addOns);
+  if(addOnError){ toast(addOnError); return; }
+  const {materiais,horas,addons,addOns,taxaFalhas,margemLucro} = currentCalcInputs();
   const validMateriais = materiais.filter(m=>m.marca && m.gramas>0);
   if(validMateriais.length===0){ toast('Escolhe pelo menos um filamento e indica as gramas'); return; }
   if(!c.projeto || !c.projeto.trim()){ toast('Dá um nome ao projeto'); return; }
@@ -902,13 +1037,13 @@ async function saveCalcToHistory(){
   const pedido = {
     id:uid(), projeto:c.projeto.trim(),
     materiais: pedidoMateriais,
-    horas:parseFloat(horas)||0, addons:parseFloat(addons)||0,
+    horas:parseFloat(horas)||0, addons:parseFloat(addons)||0, addOns,
     taxaFalhas, margemLucro,
     custoFilamento:b.custoFilamento, custoEletricidade:b.custoEletricidade, custoFinal:b.custoFinal,
     bufferFalhas:b.bufferFalhas, lucroValor:b.lucroValor,
     precoVenda:b.precoVenda, recebido:null, status:'orcamento', data:todayISO(), notas:''
   };
-  pedido.costSnapshot = buildCostSnapshot({materiais:pedidoMateriais, horas, addons, taxaFalhas, margemLucro, breakdown:b});
+  pedido.costSnapshot = buildCostSnapshot({materiais:pedidoMateriais, horas, addons, addOns, taxaFalhas, margemLucro, breakdown:b});
   state.pedidos.unshift(pedido);
   if (window.AutoSave) window.AutoSave.schedule();
   await savePedidos();
@@ -916,8 +1051,95 @@ async function saveCalcToHistory(){
   clearCalc();
 }
 function clearCalc(){
-  state.calc = {projeto:'', materiais:[{id:uid(), filKey:'', gramas:''}], horas:'', addons:'', taxaFalhas:null, margemLucro:null};
+  state.calc = {projeto:'', materiais:[{id:uid(), filKey:'', gramas:''}], horas:'', addons:'', addOns:[{id:uid(), nome:'', valor:''}], taxaFalhas:null, margemLucro:null};
   render();
+}
+
+/* ---------------------------------------------------------------
+   RENDER: ENVIOS
+--------------------------------------------------------------- */
+function renderShipping(){
+  const s = state.shipping;
+  const services = shippingModule?.CTT_TARIFF?.services || {};
+  const registered = s.service==='registado';
+  return `
+    <div class="page-head">
+      <div>
+        <h1>Simulador de envios</h1>
+        <p>Estimativa para pacotes postais nacionais com base no preçário CTT 2026.</p>
+      </div>
+    </div>
+    <div class="shipping-grid">
+      <div class="card">
+        <h2><span class="dot"></span>Dados do envio</h2>
+        <div class="field">
+          <label>Peso total com embalagem</label>
+          <div class="unit-input"><input type="number" min="1" max="2000" step="1" value="${escapeHtml(s.weight)}" placeholder="ex: 350" oninput="state.shipping.weight=this.value;renderShippingQuote()"><span>g</span></div>
+        </div>
+        <div class="field">
+          <label>Tipo de envio</label>
+          <select onchange="setShippingService(this.value)">
+            ${Object.entries(services).map(([key,service])=>`<option value="${key}" ${s.service===key?'selected':''}>${escapeHtml(service.label)} — ${escapeHtml(service.detail)}</option>`).join('')}
+          </select>
+        </div>
+        ${registered ? `
+          <div class="form-section-title">Serviços adicionais</div>
+          <div class="shipping-options">
+            <label class="check-row"><input type="checkbox" ${s.cod?'checked':''} onchange="setShippingOption('cod',this.checked)"><span><b>À cobrança</b><small>Contra reembolso, até 2 500 €</small></span></label>
+            ${s.cod ? `<div class="field shipping-subfield"><label>Valor a cobrar</label><div class="unit-input"><input type="number" min="0.01" max="2500" step="0.01" value="${escapeHtml(s.codAmount)}" oninput="state.shipping.codAmount=this.value;renderShippingQuote()"><span>€</span></div></div>` : ''}
+            <label class="check-row"><input type="checkbox" ${s.receipt?'checked':''} ${s.own?'disabled':''} onchange="setShippingOption('receipt',this.checked)"><span><b>Aviso de receção</b><small>Comprovativo assinado em papel</small></span></label>
+            <label class="check-row"><input type="checkbox" ${s.electronic?'checked':''} onchange="setShippingOption('electronic',this.checked)"><span><b>Aviso eletrónico</b><small>Alerta de entrega por SMS ou email</small></span></label>
+            <label class="check-row"><input type="checkbox" ${s.own?'checked':''} onchange="setShippingOption('own',this.checked)"><span><b>Entrega ao próprio</b><small>Inclui obrigatoriamente aviso de receção</small></span></label>
+          </div>
+          ${(s.cod||s.electronic) ? `<div class="field vat-field"><label>Taxa de IVA dos serviços adicionais</label><select onchange="state.shipping.vatRate=parseFloat(this.value);renderShippingQuote()"><option value="0.23" ${Number(s.vatRate)===0.23?'selected':''}>Continente — 23%</option><option value="0.22" ${Number(s.vatRate)===0.22?'selected':''}>Madeira — 22%</option><option value="0.16" ${Number(s.vatRate)===0.16?'selected':''}>Açores — 16%</option></select></div>` : ''}
+        ` : `<div class="shipping-note">Os serviços à cobrança e os comprovativos de entrega estão disponíveis no Correio Registado.</div>`}
+      </div>
+      <div class="card shipping-result-card">
+        <h2><span class="dot" style="background:var(--teal);"></span>Estimativa</h2>
+        <div id="shippingQuote"></div>
+      </div>
+    </div>
+  `;
+}
+
+function setShippingService(service){
+  state.shipping.service = service;
+  if(service!=='registado'){
+    state.shipping.cod = false;
+    state.shipping.receipt = false;
+    state.shipping.electronic = false;
+    state.shipping.own = false;
+  }
+  render();
+}
+
+function setShippingOption(option, enabled){
+  state.shipping[option] = enabled;
+  if(option==='own' && enabled) state.shipping.receipt = true;
+  render();
+}
+
+function renderShippingQuote(){
+  const host = document.getElementById('shippingQuote');
+  if(!host || !shippingModule) return;
+  if(!state.shipping.weight){
+    host.innerHTML = `<div class="shipping-empty">${ICONS.box}<p>Indica o peso para calcular o envio.</p></div>`;
+    return;
+  }
+  const quote = shippingModule.calculateShippingQuote(state.shipping);
+  if(quote.error){
+    host.innerHTML = `<div class="shipping-error">${escapeHtml(quote.error)}</div>`;
+    return;
+  }
+  host.innerHTML = `
+    <div class="shipping-service"><span>${escapeHtml(quote.service)}</span><small>${fmtNum(quote.weight)} g · escalão até ${fmtNum(quote.maxWeight)} g</small></div>
+    <div class="shipping-breakdown">
+      ${quote.lines.map(line=>`<div><span>${escapeHtml(line.label)}${line.taxable?' (IVA incl.)':''}</span><b>${fmtEUR(line.value)}</b></div>`).join('')}
+    </div>
+    <div class="shipping-total"><span>Total estimado</span><strong>${fmtEUR(quote.total)}</strong></div>
+    ${quote.vat>0 ? `<div class="shipping-vat">Inclui ${fmtEUR(quote.vat)} de IVA nos serviços adicionais sujeitos.</div>` : ''}
+    <div class="shipping-source">Preçário base CTT ${quote.tariffYear}. Confirma dimensões e condições no <a href="${shippingModule.CTT_TARIFF.source}" target="_blank" rel="noopener">preçário oficial</a>.</div>
+  `;
 }
 
 /* ---------------------------------------------------------------
@@ -951,13 +1173,13 @@ function getPedidoPrecoKgLabel(p){
 }
 
 function getPedidoLoteLabel(p){
-  if(!p?.costSnapshot) return 'Lote não registado';
+  if(!p?.costSnapshot) return 'Bobina não registada';
   const mats = getPedidoSnapshotMateriais(p).filter(m=>m.loteNome);
   if(mats.length>1){
     const nomes = [...new Set(mats.map(m=>m.loteNome).filter(Boolean))];
-    return nomes.length===1 ? nomes[0] : 'vários lotes';
+    return nomes.length===1 ? 'Bobina' : 'várias bobinas';
   }
-  return mats[0]?.loteNome || 'Lote não registado';
+  return mats[0]?.loteNome ? 'Bobina' : 'Bobina não registada';
 }
 
 function escapeAttr(s){
@@ -968,20 +1190,20 @@ function getPedidoMateriaisTooltip(p){
   const snapMats = getPedidoSnapshotMateriais(p);
   if(p?.costSnapshot && snapMats.length>0){
     return snapMats.map(m=>{
-      const fil = [m.marca, m.cor].filter(Boolean).join(' ') || 'Material';
-      const lote = m.loteNome || 'Lote não registado';
+      const fil = [m.marca, m.tipo, m.cor].filter(Boolean).join(' ') || 'Material';
+      const bobina = m.loteId ? 'Bobina registada' : 'Bobina não registada';
       const preco = m.lotePrecoKg!=null ? `${fmtEUR(m.lotePrecoKg)}/kg` : 'preço n/d';
       const gramas = m.gramas!=null ? `${fmtNum(m.gramas)} g` : 'gramas n/d';
-      return `${fil} — ${gramas} — ${lote} — ${preco}`;
+      return `${fil} — ${gramas} — ${bobina} — ${preco}`;
     }).join('\n');
   }
   const mats = p?.materiais || [];
   if(mats.length===0) return 'Detalhe não registado';
   return mats.map(m=>{
-    const fil = [m.marca, m.cor].filter(Boolean).join(' ') || 'Material';
+    const fil = [m.marca, m.tipo, m.cor].filter(Boolean).join(' ') || 'Material';
     const gramas = m.gramas!=null ? `${fmtNum(m.gramas)} g` : 'gramas n/d';
     const preco = m.precoKg!=null ? `${fmtEUR(m.precoKg)}/kg` : 'preço n/d';
-    return `${fil} — ${gramas} — Lote não registado — ${preco}`;
+    return `${fil} — ${gramas} — Bobina não registada — ${preco}`;
   }).join('\n');
 }
 
@@ -992,11 +1214,13 @@ function getPedidoCustosTooltip(p){
   const eletricidade = snap?.custoEletricidade ?? p?.custoEletricidade;
   const falhas = snap?.bufferFalhas ?? p?.bufferFalhas;
   const addons = snap?.addons ?? p?.addons;
+  const addOnDetails = getPedidoAddOns(p);
   return [
     `Filamento: ${custoFilamento!=null ? fmtEUR(custoFilamento) : 'n/d'}`,
     `Eletricidade: ${eletricidade!=null ? fmtEUR(eletricidade) : 'n/d'}`,
     `Falhas: ${falhas!=null ? fmtEUR(falhas) : 'n/d'}`,
     `Addons: ${addons!=null ? fmtEUR(addons) : 'n/d'}`,
+    ...addOnDetails.map(addOn=>`  ${addOn.nome}: ${fmtEUR(addOn.valor)}`),
     `Total: ${fmtEUR(costs.custoFinal)}`
   ].join('\n');
 }
@@ -1022,7 +1246,7 @@ function pedidosFiltrados(){
   const showTrash = state.hist.status === 'lixo';
   let list = state.pedidos.filter(p=>showTrash ? p.deleted === true : p.deleted !== true);
   const s = state.hist.search.trim().toLowerCase();
-  if(s) list = list.filter(p => (p.projeto||'').toLowerCase().includes(s) || getPedidoCliente(p).toLowerCase().includes(s) || (p.materiais||[]).some(m=>(m.marca||'').toLowerCase().includes(s) || (m.cor||'').toLowerCase().includes(s)));
+  if(s) list = list.filter(p => (p.projeto||'').toLowerCase().includes(s) || getPedidoCliente(p).toLowerCase().includes(s) || (p.materiais||[]).some(m=>(m.marca||'').toLowerCase().includes(s) || (m.tipo||'').toLowerCase().includes(s) || (m.cor||'').toLowerCase().includes(s)));
   if(!showTrash && state.hist.status!=='todos') list = list.filter(p=>getPedidoStatusView(p).id===state.hist.status);
   const sort = state.hist.sort;
   list.sort((a,b)=>{
@@ -1151,14 +1375,14 @@ function renderHistTable(){
 }
 
 function exportCSV(){
-  const headers = ['Projeto','Materiais','GramasTotal','Horas','Addons','CustoFilamento','CustoEletricidade','CustoFinal','PrecoVendaSugerido','Recebido','Lucro','Estado','Data'];
+  const headers = ['Projeto','Materiais','GramasTotal','Horas','Addons','AddonsDetalhe','CustoFilamento','CustoEletricidade','CustoFinal','PrecoVendaSugerido','Recebido','Lucro','Estado','Data'];
   const rows = state.pedidos.filter(p=>p.deleted !== true).map(p=>{
     const costs = getPedidoCostValues(p);
     return [
       p.projeto,
-      (p.materiais||[]).map(m=>`${m.marca} ${m.cor} (${m.gramas}g)`).join(' + '),
+      (p.materiais||[]).map(m=>`${m.marca} ${m.tipo||''} ${m.cor} (${m.gramas}g)`.replace(/\s+/g,' ').trim()).join(' + '),
       (p.materiais||[]).reduce((s,m)=>s+(m.gramas||0),0),
-      p.horas,p.addons,
+      p.horas,p.costSnapshot?.addons ?? p.addons ?? 0,getPedidoAddOns(p).map(addOn=>`${addOn.nome}: ${addOn.valor.toFixed(2)} EUR`).join(' + '),
       costs.custoFilamento.toFixed(4),costs.custoEletricidade.toFixed(4),costs.custoFinal.toFixed(4),costs.precoVenda.toFixed(4),
       p.recebido!==null?p.recebido:'', p.recebido!==null?(p.recebido-costs.custoFinal).toFixed(4):'', p.status, p.data||''
     ];
@@ -1184,8 +1408,8 @@ function openEditPedidoModal(id){
   if(!p) return;
   state.modal = {type:'editPedido', id, form:{
     projeto:p.projeto,
-    materiais: (p.materiais||[]).map(m=>({id:uid(), filKey:filKey(m.marca,m.cor), gramas:m.gramas})),
-    horas:p.horas, addons:p.addons,
+    materiais: (p.materiais||[]).map(m=>({id:uid(), filKey:savedMaterialFilamentKey(m), gramas:m.gramas})),
+    horas:p.horas, addons:p.costSnapshot?.addons ?? p.addons, addOns:normalizeAddOns(p.addOns || p.costSnapshot?.addOns, p.costSnapshot?.addons ?? p.addons),
     recebido: p.recebido, status:p.status, data: p.data||''
   }};
   render();
@@ -1247,16 +1471,18 @@ async function doDuplicatePedido(){
   if(!m.nome || !m.nome.trim()){ toast('Dá um nome ao novo projeto'); return; }
   const materiaisAtuais = resolveMateriais((p.materiais||[]).map(mat=>({
     id:uid(),
-    filKey:filKey(mat.marca,mat.cor),
+    filKey:savedMaterialFilamentKey(mat),
     gramas:mat.gramas
   }))).filter(mat=>mat.marca && mat.gramas>0);
   const materiaisSnapshot = materiaisAtuais.length === (p.materiais||[]).length
     ? materiaisAtuais.map(buildPedidoMaterialSnapshot)
     : (p.materiais||[]).map(mat=>({...mat}));
+  const addOns = getPedidoAddOns(p);
+  const addons = getAddOnsTotal(addOns, p.addons);
   const b = calcBreakdown({
     materiais:materiaisSnapshot,
     horas:p.horas,
-    addons:p.addons,
+    addons,
     taxaFalhas:p.taxaFalhas,
     margemLucro:p.margemLucro
   });
@@ -1264,6 +1490,7 @@ async function doDuplicatePedido(){
     ...p, id:uid(),
     projeto: m.nome.trim(),
     materiais: materiaisSnapshot,
+    addons, addOns:addOns.map(addOn=>({...addOn})),
     recebido: null, status:'orcamento', data: todayISO(),
     costSnapshot:null
   };
@@ -1273,6 +1500,7 @@ async function doDuplicatePedido(){
     materiais:materiaisSnapshot,
     horas:novo.horas,
     addons:novo.addons,
+    addOns:novo.addOns,
     taxaFalhas:novo.taxaFalhas,
     margemLucro:novo.margemLucro,
     breakdown:b
@@ -1303,6 +1531,10 @@ async function saveEditPedido(){
   if(!p) return;
   const f = m.form;
   if(!f.projeto || !f.projeto.trim()){ toast('O projeto precisa de um nome'); return; }
+  const addOnError = validateAddOns(f.addOns);
+  if(addOnError){ toast(addOnError); return; }
+  const addOns = getStoredAddOns(f.addOns, f.addons);
+  const addons = getAddOnsTotal(f.addOns, f.addons);
   const shouldRecalculate = !sameCostInputs(p, f);
   console.log(shouldRecalculate ? 'Snapshot: recalculado' : 'Snapshot: mantido');
   let resolved = [];
@@ -1315,20 +1547,24 @@ async function saveEditPedido(){
   p.status = f.status;
   p.recebido = (f.recebido===''||f.recebido===null) ? null : parseFloat(f.recebido);
   if(p.status==='orcamento') p.recebido = null;
+  p.addOns = addOns;
+  p.addons = addons;
   if(shouldRecalculate){
     p.materiais = resolved.map(buildPedidoMaterialSnapshot);
     p.horas = parseFloat(f.horas)||0;
-    p.addons = parseFloat(f.addons)||0;
     const b = calcBreakdown({materiais:p.materiais,horas:p.horas,addons:p.addons,taxaFalhas:p.taxaFalhas,margemLucro:p.margemLucro});
     applyPedidoBreakdown(p, b);
     p.costSnapshot = buildCostSnapshot({
       materiais:p.materiais,
       horas:p.horas,
       addons:p.addons,
+      addOns:p.addOns,
       taxaFalhas:p.taxaFalhas,
       margemLucro:p.margemLucro,
       breakdown:b
     });
+  }else if(p.costSnapshot){
+    p.costSnapshot.addOns = addOns.map(addOn=>({...addOn}));
   }
   if (window.AutoSave) window.AutoSave.schedule();
   await savePedidos();
@@ -1365,43 +1601,125 @@ function normalizeLotesFilamento(filamento, persist=false){
 }
 
 function renderFil(){
-  const list = [...state.filamentos].sort((a,b)=>(a.marca+a.cor).localeCompare(b.marca+b.cor));
+  const materials = [...new Set(state.filamentos.map(f=>(f.tipo||f.material||'').trim()).filter(Boolean))]
+    .sort((a,b)=>a.localeCompare(b,'pt-PT'));
+  const activeCount = state.filamentos.filter(f=>!f.arquivado).length;
+  const archivedCount = state.filamentos.filter(f=>f.arquivado).length;
   return `
     <div class="page-head">
       <div>
-        <h1>Base de filamentos</h1>
-        <p>Marcas, cores e preços usados no cálculo de custo.</p>
+        <h1>Bobinas de filamento</h1>
+        <p>Uma linha por bobina física, com identificação e preço de compra.</p>
       </div>
-      <button class="btn btn-accent" onclick="openFilModal()">${ICONS.plus} Novo filamento</button>
+      <button class="btn btn-accent" onclick="openFilModal()">${ICONS.plus} Nova bobina</button>
     </div>
-    <div class="card" style="padding:0;overflow-x:auto;">
-      ${list.length===0 ? `<div class="empty-state">${ICONS.fil}<p>Ainda não tens filamentos registados.</p></div>` : `
-      <div class="fil-list">
-        <div class="fil-header">
-          <span>Marca</span><span>Tipo</span><span>Cor</span><span>Lote ativo</span><span>€/kg</span><span>Fornecedor</span><span>Data</span><span>Ações</span>
-        </div>
-        ${list.map(f=>{
-          normalizeLotesFilamento(f);
-          const loteState = getLoteUiState(f);
-          const lote = loteState.lote;
-          return `<article class="fil-row">
-              <div class="fil-name"><span class="fil-label">Marca</span><strong>${escapeHtml(f.marca)}</strong></div>
-              <div><span class="fil-label">Tipo</span>${escapeHtml(f.tipo || f.material || 'Tipo n/d')}</div>
-              <div><span class="fil-label">Cor</span><span style="display:inline-flex;align-items:center;gap:7px;"><span style="width:9px;height:9px;border-radius:50%;background:${colorSwatch(f.cor)};display:inline-block;border:1px solid var(--border);"></span>${escapeHtml(f.cor)}</span></div>
-              <div><span class="fil-label">Lote ativo</span><span style="display:inline-flex;align-items:center;gap:7px;flex-wrap:wrap;">${escapeHtml(lote?.nome || 'Sem lote')} <span class="badge ${loteState.cls}">${loteState.label}</span></span></div>
-              <div class="mono"><span class="fil-label">€/kg</span><b style="color:var(--accent);">${lote ? fmtEUR(getPrecoKgFilamento(f)) : '—'}</b></div>
-              <div class="muted"><span class="fil-label">Fornecedor</span>${escapeHtml(lote?.fornecedor || 'n/d')}</div>
-              <div class="muted"><span class="fil-label">Data</span>${lote?.data ? fmtDate(lote.data) : 'n/d'}</div>
-              <div class="row-actions fil-actions">
-                <button class="btn btn-accent btn-sm" title="Gerir lotes" onclick="openLotesModal('${f.id}')">${ICONS.box} Lotes</button>
-                <button class="btn btn-ghost btn-sm" title="Editar filamento" onclick="openFilModal('${f.id}')">${ICONS.edit} Editar</button>
-                <button class="btn btn-danger btn-sm" title="Eliminar filamento" onclick="confirmDeleteFil('${f.id}')">${ICONS.trash} Eliminar</button>
-              </div>
-          </article>`;
-        }).join('')}
-      </div>`}
+    <div class="fil-toolbar">
+      <div class="segmented" aria-label="Estado das bobinas">
+        <button class="${state.fil.status==='ativos'?'active':''}" onclick="setFilStatus('ativos')">Em uso <span>${activeCount}</span></button>
+        <button class="${state.fil.status==='arquivo'?'active':''}" onclick="setFilStatus('arquivo')">Arquivo <span>${archivedCount}</span></button>
+      </div>
+      <input type="text" placeholder="Pesquisar marca, material, cor…" value="${escapeHtml(state.fil.search)}" oninput="state.fil.search=this.value;renderFilTable()">
+      <select onchange="state.fil.material=this.value;renderFilTable()">
+        <option value="todos">Todos os materiais</option>
+        ${materials.map(material=>`<option value="${escapeHtml(material)}" ${state.fil.material===material?'selected':''}>${escapeHtml(material)}</option>`).join('')}
+      </select>
+      <select onchange="state.fil.sort=this.value;renderFilTable()">
+        <option value="recentes" ${state.fil.sort==='recentes'?'selected':''}>Compra mais recente</option>
+        <option value="marca" ${state.fil.sort==='marca'?'selected':''}>Marca A-Z</option>
+        <option value="cor" ${state.fil.sort==='cor'?'selected':''}>Cor A-Z</option>
+        <option value="preco" ${state.fil.sort==='preco'?'selected':''}>Maior preço/kg</option>
+      </select>
     </div>
+    <div class="card fil-table-card" id="filTable"></div>
   `;
+}
+
+function normalizeSearchText(value){
+  return String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('pt-PT');
+}
+
+function filteredFilaments(){
+  const query = normalizeSearchText(state.fil.search);
+  const archived = state.fil.status==='arquivo';
+  const list = state.filamentos.filter(f=>{
+    if(!!f.arquivado !== archived) return false;
+    const material = (f.tipo||f.material||'').trim();
+    if(state.fil.material!=='todos' && material!==state.fil.material) return false;
+    const haystack = normalizeSearchText([f.marca,material,f.cor,getFilamentSupplier(f),getFilamentPurchaseDate(f)].join(' '));
+    return !query || haystack.includes(query);
+  });
+  if(state.fil.sort==='marca') return list.sort((a,b)=>(a.marca+a.cor).localeCompare(b.marca+b.cor,'pt-PT'));
+  if(state.fil.sort==='cor') return list.sort((a,b)=>a.cor.localeCompare(b.cor,'pt-PT'));
+  if(state.fil.sort==='preco') return list.sort((a,b)=>getPrecoKgFilamento(b)-getPrecoKgFilamento(a));
+  return list.sort((a,b)=>String(getFilamentPurchaseDate(b)).localeCompare(String(getFilamentPurchaseDate(a))));
+}
+
+function renderFilTable(){
+  const host = document.getElementById('filTable');
+  if(!host) return;
+  const list = filteredFilaments();
+  const isArchive = state.fil.status==='arquivo';
+  if(list.length===0){
+    host.innerHTML = `<div class="empty-state">${ICONS.fil}<p>${isArchive ? 'O arquivo de bobinas está vazio.' : 'Nenhuma bobina corresponde aos filtros.'}</p></div>`;
+    return;
+  }
+  host.innerHTML = `<div class="fil-list">
+    <div class="fil-header">
+      <span>Marca</span><span>Material</span><span>Cor</span><span>Compra</span><span>€/kg</span><span>Fornecedor</span><span>Data</span><span>Ações</span>
+    </div>
+    ${list.map(f=>{
+      normalizeLotesFilamento(f);
+      const purchasePrice = getFilamentPurchasePrice(f);
+      const purchaseDate = getFilamentPurchaseDate(f);
+      const supplier = getFilamentSupplier(f);
+      return `<article class="fil-row">
+        <div class="fil-name"><span class="fil-label">Marca</span><strong>${escapeHtml(f.marca)}</strong></div>
+        <div><span class="fil-label">Material</span>${escapeHtml(f.tipo || f.material || 'Tipo n/d')}</div>
+        <div><span class="fil-label">Cor</span><span class="fil-color"><span style="background:${colorSwatch(f.cor)};"></span>${escapeHtml(f.cor)}</span></div>
+        <div class="mono"><span class="fil-label">Compra</span>${fmtEUR(purchasePrice)}</div>
+        <div class="mono"><span class="fil-label">€/kg</span><b class="fil-price">${fmtEUR(getPrecoKgFilamento(f))}</b></div>
+        <div class="muted"><span class="fil-label">Fornecedor</span>${escapeHtml(supplier || 'n/d')}</div>
+        <div class="muted"><span class="fil-label">Data</span>${purchaseDate ? fmtDate(purchaseDate) : 'n/d'}</div>
+        <div class="row-actions fil-actions">
+          ${isArchive
+            ? `<button class="btn btn-ghost btn-sm" onclick="restoreFilament('${f.id}')">Restaurar</button><button class="icon-btn danger" title="Eliminar definitivamente" onclick="confirmDeleteFil('${f.id}')">${ICONS.trash}</button>`
+            : `<button class="btn btn-ghost btn-sm" title="Editar bobina" onclick="openFilModal('${f.id}')">${ICONS.edit} Editar</button><button class="btn btn-ghost btn-sm" onclick="archiveFilament('${f.id}')">Arquivar</button>`}
+        </div>
+      </article>`;
+    }).join('')}
+  </div>`;
+}
+
+function setFilStatus(status){
+  state.fil.status = status;
+  render();
+}
+
+async function archiveFilament(id){
+  const filamento = state.filamentos.find(f=>f.id===id);
+  if(!filamento) return;
+  filamento.arquivado = true;
+  filamento.arquivadoEm = new Date().toISOString();
+  touchFilamentos();
+  await saveFilamentos();
+  toast('Bobina arquivada');
+  render();
+}
+
+async function restoreFilament(id){
+  const filamento = state.filamentos.find(f=>f.id===id);
+  if(!filamento) return;
+  filamento.arquivado = false;
+  delete filamento.arquivadoEm;
+  const lote = getFilamentReferenceLote(filamento);
+  if(lote){
+    filamento.lotes.forEach(item=>{ item.ativo = item.id===lote.id; });
+    lote.arquivado = false;
+  }
+  touchFilamentos();
+  await saveFilamentos();
+  toast('Bobina restaurada');
+  render();
 }
 
 function colorSwatch(name){
@@ -1417,46 +1735,66 @@ function colorSwatch(name){
 function openFilModal(id){
   if(id){
     const f = state.filamentos.find(x=>x.id===id);
-    state.modal = {type:'fil', id, form:{marca:f.marca,tipo:f.tipo||f.material||'',cor:f.cor,preco:f.preco,spool:f.spool,density:f.density||'',nozzle:f.nozzle||'',bed:f.bed||''}};
+    state.modal = {type:'fil', id, form:{
+      marca:f.marca,
+      tipo:f.tipo||f.material||'',
+      cor:f.cor,
+      preco:getFilamentPurchasePrice(f),
+      spool:f.spool||1,
+      dataCompra:getFilamentPurchaseDate(f),
+      fornecedor:getFilamentSupplier(f),
+      density:f.density||'',
+      nozzle:f.nozzle||'',
+      bed:f.bed||''
+    }};
   }else{
-    state.modal = {type:'fil', id:null, form:{marca:'',tipo:'',cor:'',preco:'',spool:1,density:'',nozzle:'',bed:'',loteNome:'Lote inicial',loteData:todayISO(),loteFornecedor:'',lotePrecoKg:''}};
+    state.modal = {type:'fil', id:null, form:{marca:'',tipo:'',cor:'',preco:'',spool:1,dataCompra:todayISO(),fornecedor:'',density:'',nozzle:'',bed:''}};
   }
   render();
 }
 async function saveFilModal(){
   const m = state.modal, f = m.form;
-  if(!f.marca.trim() || !f.cor.trim()){ toast('Indica marca e cor'); return; }
-  const spool = parseFloat(f.spool)||1;
-  const lotePrecoKg = parseFloat(f.lotePrecoKg);
-  if(!m.id && f.lotePrecoKg!=='' && (isNaN(lotePrecoKg) || lotePrecoKg<0)){ toast('Indica um preço €/kg válido'); return; }
+  if(!f.marca.trim() || !f.tipo.trim() || !f.cor.trim()){ toast('Indica marca, material e cor'); return; }
+  const spool = parseFloat(f.spool);
+  const preco = parseFloat(f.preco);
+  if(isNaN(spool) || spool<=0){ toast('Indica o peso da bobina'); return; }
+  if(isNaN(preco) || preco<0){ toast('Indica o preço de compra'); return; }
+  const precoKg = preco/spool;
   const rec = {
-    marca:f.marca.trim(), tipo:(f.tipo||'').trim(), cor:f.cor.trim(), spool,
+    marca:f.marca.trim(), tipo:f.tipo.trim(), cor:f.cor.trim(), preco, spool,
+    dataCompra:f.dataCompra || '', fornecedor:(f.fornecedor||'').trim(),
     density:f.density?parseFloat(f.density):null, nozzle:f.nozzle?parseFloat(f.nozzle):null, bed:f.bed?parseFloat(f.bed):null
   };
-  if(m.id) rec.preco = parseFloat(f.preco)||0;
   if(m.id){
     const idx = state.filamentos.findIndex(x=>x.id===m.id);
-    state.filamentos[idx] = {...state.filamentos[idx], ...rec};
-  }else{
-    const novo = {id:uid(), ...rec, lotes:[]};
-    if(f.lotePrecoKg!==''){
-      novo.lotes.push({
-        id:'L001',
-        nome:(f.loteNome||'Lote inicial').trim(),
-        data:f.loteData || todayISO(),
-        fornecedor:(f.loteFornecedor||'').trim(),
-        precoKg:lotePrecoKg,
-        ativo:true,
-        arquivado:false,
+    const existing = state.filamentos[idx];
+    state.filamentos[idx] = {...existing, ...rec};
+    const lote = getFilamentReferenceLote(state.filamentos[idx]);
+    if(lote){
+      lote.nome = 'Bobina';
+      lote.data = rec.dataCompra;
+      lote.fornecedor = rec.fornecedor;
+      lote.precoKg = precoKg;
+      lote.ativo = !state.filamentos[idx].arquivado;
+      lote.arquivado = !!state.filamentos[idx].arquivado;
+    }else{
+      state.filamentos[idx].lotes = [{
+        id:'L001', nome:'Bobina', data:rec.dataCompra, fornecedor:rec.fornecedor,
+        precoKg, ativo:!state.filamentos[idx].arquivado, arquivado:!!state.filamentos[idx].arquivado,
         criadoEm:new Date().toISOString()
-      });
+      }];
     }
+  }else{
+    const novo = {id:uid(), ...rec, arquivado:false, lotes:[{
+      id:'L001', nome:'Bobina', data:rec.dataCompra, fornecedor:rec.fornecedor,
+      precoKg, ativo:true, arquivado:false, criadoEm:new Date().toISOString()
+    }]};
     state.filamentos.push(novo);
   }
-  if (window.AutoSave) window.AutoSave.schedule();
+  touchFilamentos();
   await saveFilamentos();
   closeModal();
-  toast('Filamento guardado');
+  toast('Bobina guardada');
 }
 
 function loteFormDefaults(){
@@ -1538,7 +1876,7 @@ async function doDeleteFil(id){
   if (window.AutoSave) window.AutoSave.schedule();
   await saveFilamentos();
   closeModal();
-  toast('Filamento eliminado');
+  toast('Bobina eliminada');
 }
 
 /* ---------------------------------------------------------------
@@ -1734,38 +2072,33 @@ function renderModal(){
   }
   if(m.type==='fil'){
     const f = m.form;
-    const loteInicialHtml = m.id ? '' : `
-      <div style="border-top:1px solid var(--border-soft);padding-top:14px;margin-top:14px;">
-        <h3 style="font-size:14px;margin-bottom:12px;">Lote inicial</h3>
-        <div class="row2">
-          <div class="field"><label>Nome do lote</label><input type="text" value="${escapeHtml(f.loteNome)}" oninput="state.modal.form.loteNome=this.value" placeholder="ex: Lote inicial"></div>
-          <div class="field"><label>Data</label><input type="date" value="${escapeHtml(f.loteData)}" oninput="state.modal.form.loteData=this.value"></div>
-        </div>
-        <div class="row2">
-          <div class="field"><label>Fornecedor</label><input type="text" value="${escapeHtml(f.loteFornecedor)}" oninput="state.modal.form.loteFornecedor=this.value" placeholder="ex: Loja / fornecedor"></div>
-          <div class="field"><label>Preço €/kg</label><div class="unit-input"><input type="number" step="any" min="0" value="${escapeHtml(f.lotePrecoKg)}" oninput="state.modal.form.lotePrecoKg=this.value" placeholder="0"><span>€/kg</span></div></div>
-        </div>
-      </div>`;
-    return modalWrap(`${m.id?'Editar':'Novo'} filamento`, `
+    return modalWrap(`${m.id?'Editar':'Nova'} bobina`, `
       <div class="row3">
         <div class="field"><label>Marca</label><input type="text" value="${escapeHtml(f.marca)}" oninput="state.modal.form.marca=this.value" placeholder="ex: Elegoo"></div>
-        <div class="field"><label>Tipo de filamento</label><input type="text" value="${escapeHtml(f.tipo)}" oninput="state.modal.form.tipo=this.value" placeholder="ex: PLA Matte"></div>
+        <div class="field"><label>Material / acabamento</label><input type="text" value="${escapeHtml(f.tipo)}" oninput="state.modal.form.tipo=this.value" placeholder="ex: PLA Matte"></div>
         <div class="field"><label>Cor</label><input type="text" value="${escapeHtml(f.cor)}" oninput="state.modal.form.cor=this.value" placeholder="ex: Branco"></div>
       </div>
-      <div class="field"><label>Tamanho da bobina</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.spool}" oninput="state.modal.form.spool=this.value"><span>kg</span></div></div>
+      <div class="row2">
+        <div class="field"><label>Peso da bobina</label><div class="unit-input"><input type="number" step="any" min="0.01" value="${f.spool}" oninput="state.modal.form.spool=this.value"><span>kg</span></div></div>
+        <div class="field"><label>Preço de compra</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.preco}" oninput="state.modal.form.preco=this.value"><span>€</span></div></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>Fornecedor</label><input type="text" value="${escapeHtml(f.fornecedor)}" oninput="state.modal.form.fornecedor=this.value" placeholder="ex: Amazon"></div>
+        <div class="field"><label>Data de compra</label><input type="date" value="${escapeHtml(f.dataCompra)}" oninput="state.modal.form.dataCompra=this.value"></div>
+      </div>
+      <div class="form-section-title">Parâmetros de impressão</div>
       <div class="row3">
         <div class="field"><label>Densidade</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.density}" oninput="state.modal.form.density=this.value"><span>g/cm³</span></div></div>
         <div class="field"><label>Nozzle</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.nozzle}" oninput="state.modal.form.nozzle=this.value"><span>°C</span></div></div>
         <div class="field"><label>Bed</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.bed}" oninput="state.modal.form.bed=this.value"><span>°C</span></div></div>
       </div>
-      ${loteInicialHtml}
     `, [
       {label:'Cancelar', cls:'btn-ghost', action:'closeModal()'},
       {label:'Guardar', cls:'btn-accent', action:'saveFilModal()'}
     ]);
   }
   if(m.type==='deleteFil'){
-    return modalWrap('Eliminar filamento', `<p style="color:var(--text-dim);font-size:13.5px;">Tens a certeza que queres eliminar <b>${escapeHtml(m.nome)}</b>? Esta ação não afeta registos já guardados no histórico.</p>`, [
+    return modalWrap('Eliminar bobina', `<p style="color:var(--text-dim);font-size:13.5px;">Tens a certeza que queres eliminar definitivamente <b>${escapeHtml(m.nome)}</b>? Esta ação não afeta registos já guardados no histórico.</p>`, [
       {label:'Cancelar', cls:'btn-ghost', action:'closeModal()'},
       {label:'Eliminar', cls:'btn-danger', action:`doDeleteFil('${m.id}')`}
     ]);
@@ -1814,6 +2147,7 @@ function renderModal(){
   }
   if(m.type==='editPedido'){
     const f = m.form;
+    f.addOns = normalizeAddOns(f.addOns, f.addons);
     const pedido = state.pedidos.find(p=>p.id===m.id);
     return modalWrap('Editar registo', `
       <div class="field"><label>Projeto</label><input type="text" value="${escapeHtml(f.projeto)}" oninput="state.modal.form.projeto=this.value"></div>
@@ -1823,10 +2157,14 @@ function renderModal(){
         <button type="button" class="btn btn-ghost btn-sm" onclick="modalAddMaterial()">${ICONS.plus} Adicionar filamento</button>
       </div>
       ${pedidoLoteDetailHtml(pedido)}
-      <div class="field"><label>Tempo (total)</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.horas}" oninput="state.modal.form.horas=this.value"><span>h</span></div></div>
       <div class="row2">
-        <div class="field"><label>Add-ons</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.addons}" oninput="state.modal.form.addons=this.value"><span>€</span></div></div>
+        <div class="field"><label>Tempo (total)</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.horas}" oninput="state.modal.form.horas=this.value"><span>h</span></div></div>
         <div class="field"><label>Data</label><input type="date" value="${f.data}" oninput="state.modal.form.data=this.value"></div>
+      </div>
+      <div class="field">
+        <label>Add-ons</label>
+        ${f.addOns.map(addOn=>addOnRowHtml(addOn,'modal',f.addOns.length>1)).join('')}
+        <button type="button" class="btn btn-ghost btn-sm" onclick="modalAddAddOn()">${ICONS.plus} Adicionar add-on</button>
       </div>
       <div class="row2">
         <div class="field"><label>Estado</label>
@@ -2002,10 +2340,13 @@ function render(){
   if(state.view==='calc') page.innerHTML = renderCalc();
   else if(state.view==='hist') page.innerHTML = renderHist();
   else if(state.view==='fil') page.innerHTML = renderFil();
+  else if(state.view==='ship') page.innerHTML = renderShipping();
   else if(state.view==='cfg') page.innerHTML = renderCfg();
 
   if(state.view==='calc') updateCalcPreview();
   if(state.view==='hist') renderHistTable();
+  if(state.view==='fil') renderFilTable();
+  if(state.view==='ship') renderShippingQuote();
 
   let modalHost = document.getElementById('modalHost');
   if(!modalHost){
@@ -2023,6 +2364,7 @@ function render(){
   const appSrc = document.currentScript.src;
   const format = await import(new URL('core/format.js', appSrc).href);
   Object.assign(window, format);
+  shippingModule = await import(new URL('core/shipping.js', appSrc).href);
   window.migrateFilamentosToLotes = migrateFilamentosToLotes;
   window.getLoteAtivo = getLoteAtivo;
   window.getPrecoKgFilamento = getPrecoKgFilamento;
