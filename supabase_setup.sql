@@ -115,3 +115,12 @@ revoke all on function public.save_workspace(text, jsonb, timestamptz) from publ
 grant execute on function public.get_workspace(text) to anon;
 grant execute on function public.create_workspace(text, jsonb) to anon;
 grant execute on function public.save_workspace(text, jsonb, timestamptz) to anon;
+
+-- Os anexos ficam num bucket privado. Nao existem politicas anonimas em
+-- storage.objects; os URLs temporarios sao emitidos pela Edge Function
+-- workspace-attachments depois de validar o codigo do workspace.
+insert into storage.buckets (id, name, public, file_size_limit)
+values ('realize3d-attachments', 'realize3d-attachments', false, 52428800)
+on conflict (id) do update
+set public = false,
+    file_size_limit = excluded.file_size_limit;

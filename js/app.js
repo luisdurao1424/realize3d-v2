@@ -16,6 +16,7 @@ const ICONS = {
   copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>',
   dashboard: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>',
   workflow: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="6" height="6" rx="1"/><rect x="15" y="15" width="6" height="6" rx="1"/><path d="M9 6h4a2 2 0 012 2v7M15 18h-4a2 2 0 01-2-2V9"/></svg>',
+  attachment: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.6l-8.5 8.5a6 6 0 01-8.5-8.5l9.2-9.2a4 4 0 115.7 5.7l-9.2 9.2a2 2 0 01-2.8-2.8l8.5-8.5"/></svg>',
 };
 
 const DEFAULT_CONFIG = {
@@ -125,6 +126,10 @@ function savedMaterialFilamentKey(material){
 --------------------------------------------------------------- */
 const SUPABASE_URL = 'https://dkqzhgckekrfuyrgmaxd.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_xQml96WeT3jczwV_F0YTSQ_YjTqNPzB';
+const ATTACHMENT_BUCKET = 'realize3d-attachments';
+const ATTACHMENT_FUNCTION = 'workspace-attachments';
+const MAX_ATTACHMENT_SIZE = 50 * 1024 * 1024;
+const ATTACHMENT_ACCEPT = '.stl,.3mf,image/jpeg,image/png,image/webp,image/heic,image/heif';
 
 let sb = null;
 try{
@@ -298,6 +303,170 @@ async function pushPayload(){
 async function saveConfig(){ await pushPayload(); }
 async function saveFilamentos(){ await pushPayload(); }
 async function savePedidos(){ await pushPayload(); }
+
+function getPedidoAttachments(pedido){
+  return Array.isArray(pedido?.anexos)
+    ? pedido.anexos.filter(anexo=>anexo && anexo.id && anexo.path && anexo.nome)
+    : [];
+}
+function attachmentExtension(name){
+  const value = String(name||'');
+  return value.includes('.') ? value.split('.').pop().toLowerCase() : '';
+}
+function attachmentKind(name){
+  return ['jpg','jpeg','png','webp','heic','heif'].includes(attachmentExtension(name)) ? 'image' : 'model';
+}
+function attachmentContentType(file){
+  if(file.type) return file.type;
+  const map = {stl:'model/stl','3mf':'model/3mf',jpg:'image/jpeg',jpeg:'image/jpeg',png:'image/png',webp:'image/webp',heic:'image/heic',heif:'image/heif'};
+  return map[attachmentExtension(file.name)] || 'application/octet-stream';
+}
+function formatFileSize(bytes){
+  const value = Number(bytes)||0;
+  if(value < 1024) return `${value} B`;
+  if(value < 1024*1024) return `${(value/1024).toFixed(1)} KB`;
+  return `${(value/(1024*1024)).toFixed(1)} MB`;
+}
+function validateAttachmentFile(file){
+  const extension = attachmentExtension(file?.name);
+  if(!['stl','3mf','jpg','jpeg','png','webp','heic','heif'].includes(extension)) return 'Formato não suportado';
+  if(!file.size || file.size > MAX_ATTACHMENT_SIZE) return 'Cada ficheiro deve ter no máximo 50 MB';
+  return '';
+}
+async function attachmentApi(action, body={}){
+  if(!sb || !workspaceCode) throw new Error('attachments-offline');
+  const {data, error} = await sb.functions.invoke(ATTACHMENT_FUNCTION, {
+    body:{action, workspaceCode, ...body}
+  });
+  if(error) throw error;
+  if(data?.error) throw new Error(data.error);
+  return data;
+}
+function pedidoAttachmentsHtml(pedido, modal){
+  const anexos = getPedidoAttachments(pedido);
+  return `
+    <section class="attachments-section">
+      <div class="attachments-heading">
+        <div>
+          <strong>Anexos</strong>
+          <span>Modelos 3D e fotografias deste projeto</span>
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('pedidoAttachmentInput').click()" ${modal.uploading?'disabled':''}>${ICONS.attachment} Anexar</button>
+        <input id="pedidoAttachmentInput" type="file" accept="${ATTACHMENT_ACCEPT}" multiple hidden onchange="uploadPedidoAttachments(this)">
+      </div>
+      ${modal.uploading ? `<div class="attachment-uploading"><span class="attachment-spinner"></span>${escapeHtml(modal.uploadLabel||'A carregar ficheiros…')}</div>` : ''}
+      ${anexos.length ? `<div class="attachment-list">${anexos.map(anexo=>`
+        <div class="attachment-row">
+          <div class="attachment-type">${attachmentKind(anexo.nome)==='image'?'FOTO':escapeHtml(attachmentExtension(anexo.nome).toUpperCase())}</div>
+          <div class="attachment-info">
+            <strong title="${escapeAttr(anexo.nome)}">${escapeHtml(anexo.nome)}</strong>
+            <span>${formatFileSize(anexo.size)}${anexo.uploadedAt ? ` · ${fmtDate(anexo.uploadedAt)}` : ''}</span>
+          </div>
+          <div class="attachment-actions">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="openPedidoAttachment('${pedido.id}','${anexo.id}',${attachmentKind(anexo.nome)==='model'})" title="${attachmentKind(anexo.nome)==='image'?'Abrir fotografia':'Transferir modelo'}">${attachmentKind(anexo.nome)==='image'?'Abrir':ICONS.download}</button>
+            <button type="button" class="icon-btn danger" onclick="confirmDeletePedidoAttachment('${pedido.id}','${anexo.id}')" title="Eliminar anexo">${ICONS.trash}</button>
+          </div>
+        </div>`).join('')}</div>` : `<div class="attachments-empty">Ainda não há ficheiros anexados.</div>`}
+      <div class="hint">STL, 3MF, JPG, PNG, WebP ou HEIC. Máximo de 50 MB por ficheiro.</div>
+    </section>`;
+}
+async function uploadPedidoAttachments(input){
+  const modal = state.modal;
+  if(!modal || modal.type!=='editPedido' || modal.uploading) return;
+  const pedido = state.pedidos.find(p=>p.id===modal.id);
+  const files = Array.from(input?.files||[]);
+  if(!pedido || !files.length) return;
+  input.value = '';
+  if(files.length>10){ toast('Seleciona no máximo 10 ficheiros de cada vez'); return; }
+  const invalid = files.map(file=>({file,error:validateAttachmentFile(file)})).find(item=>item.error);
+  if(invalid){ toast(`${invalid.error}: ${invalid.file.name}`); return; }
+
+  modal.uploading = true;
+  modal.uploadLabel = `A carregar 1 de ${files.length}…`;
+  render();
+  let completed = 0;
+  try{
+    for(const file of files){
+      modal.uploadLabel = `A carregar ${completed+1} de ${files.length}…`;
+      if(state.modal===modal) render();
+      const contentType = attachmentContentType(file);
+      const ticket = await attachmentApi('create_upload', {
+        pedidoId:pedido.id, fileName:file.name, contentType, size:file.size
+      });
+      const {error} = await sb.storage.from(ATTACHMENT_BUCKET).uploadToSignedUrl(ticket.path, ticket.token, file, {contentType});
+      if(error) throw error;
+      pedido.anexos = [...getPedidoAttachments(pedido), {
+        id:ticket.attachmentId,
+        path:ticket.path,
+        nome:file.name,
+        type:contentType,
+        size:file.size,
+        kind:attachmentKind(file.name),
+        uploadedAt:new Date().toISOString()
+      }];
+      completed++;
+    }
+    if (window.AutoSave) window.AutoSave.schedule();
+    const saved = await pushPayload();
+    if(!saved) throw new Error('attachment-metadata-save-failed');
+    toast(files.length===1 ? 'Ficheiro anexado' : `${files.length} ficheiros anexados`);
+  }catch(error){
+    console.error('Não foi possível anexar o ficheiro', error);
+    toast(completed ? `${completed} ficheiro(s) anexado(s); um envio falhou` : 'Não foi possível anexar o ficheiro');
+  }finally{
+    modal.uploading = false;
+    modal.uploadLabel = '';
+    if(state.modal===modal) render();
+  }
+}
+async function openPedidoAttachment(pedidoId, attachmentId, download=false){
+  const pedido = state.pedidos.find(p=>p.id===pedidoId);
+  const anexo = getPedidoAttachments(pedido).find(item=>item.id===attachmentId);
+  if(!anexo) return;
+  try{
+    const result = await attachmentApi('create_download', {path:anexo.path, download:Boolean(download)});
+    const link = document.createElement('a');
+    link.href = result.signedUrl;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    if(download) link.download = anexo.nome;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }catch(error){
+    console.error('Não foi possível abrir o anexo', error);
+    toast('Não foi possível abrir o anexo');
+  }
+}
+function confirmDeletePedidoAttachment(pedidoId, attachmentId){
+  const pedido = state.pedidos.find(p=>p.id===pedidoId);
+  const anexo = getPedidoAttachments(pedido).find(item=>item.id===attachmentId);
+  if(!pedido || !anexo) return;
+  state.modal = {type:'deleteAttachment', pedidoId, attachmentId, nome:anexo.nome, previous:state.modal};
+  render();
+}
+function cancelDeletePedidoAttachment(){
+  state.modal = state.modal?.previous || null;
+  render();
+}
+async function deletePedidoAttachment(){
+  const modal = state.modal;
+  const pedido = state.pedidos.find(p=>p.id===modal?.pedidoId);
+  const anexo = getPedidoAttachments(pedido).find(item=>item.id===modal?.attachmentId);
+  if(!pedido || !anexo) return;
+  try{
+    await attachmentApi('delete_paths', {paths:[anexo.path]});
+    pedido.anexos = getPedidoAttachments(pedido).filter(item=>item.id!==anexo.id);
+    if (window.AutoSave) window.AutoSave.schedule();
+    await savePedidos();
+    state.modal = modal.previous || null;
+    toast('Anexo eliminado');
+    render();
+  }catch(error){
+    console.error('Não foi possível eliminar o anexo', error);
+    toast('Não foi possível eliminar o anexo');
+  }
+}
 
 function buildSeedPedidos(){
   return SEED_PEDIDOS_RAW.map(row=>{
@@ -1710,7 +1879,7 @@ function renderHistTable(){
         return `<article class="history-row">
           <div class="history-name">
             <strong>${escapeHtml(p.projeto || 'Pedido sem nome')}</strong>
-            <span>${cliente ? `${escapeHtml(cliente)} · ` : ''}${data}${p.prazo ? ` · entrega ${fmtDate(p.prazo)}` : ''}</span>
+            <span>${cliente ? `${escapeHtml(cliente)} · ` : ''}${data}${p.prazo ? ` · entrega ${fmtDate(p.prazo)}` : ''}${getPedidoAttachments(p).length ? ` · ${getPedidoAttachments(p).length} anexo${getPedidoAttachments(p).length===1?'':'s'}` : ''}</span>
           </div>
           <div class="history-cell"><span class="history-label">Estado</span><span class="badge ${status.cls}">${status.label}</span>${hasProductionTracking(p)?`<span class="badge ${getProductionStatusView(p).cls}" style="margin-top:4px;">${getProductionStatusView(p).label}</span>`:''}</div>
           <div class="history-cell mono" title="${escapeAttr(materiaisTooltip)}"><span class="history-label">Gramas</span><b>${fmtNum(getPedidoGramasTotal(p))} g</b></div>
@@ -1737,7 +1906,7 @@ function renderHistTable(){
 }
 
 function exportCSV(){
-  const headers = ['Projeto','Cliente','Contacto','Prazo','EstadoComercial','EstadoProducao','Materiais','GramasTotal','HorasImpressao','HorasMaoObra','Addons','AddonsDetalhe','CustoFilamento','CustoEletricidade','CustoMaquina','CustoMaoObra','PosProcessamento','CustoEnvio','Desconto','CustoFinal','PrecoVendaSugerido','Recebido','Lucro','Data'];
+  const headers = ['Projeto','Cliente','Contacto','Prazo','EstadoComercial','EstadoProducao','Materiais','GramasTotal','HorasImpressao','HorasMaoObra','Addons','AddonsDetalhe','CustoFilamento','CustoEletricidade','CustoMaquina','CustoMaoObra','PosProcessamento','CustoEnvio','Desconto','CustoFinal','PrecoVendaSugerido','Recebido','Lucro','Anexos','NomesAnexos','Data'];
   const rows = state.pedidos.filter(p=>p.deleted !== true).map(p=>{
     const costs = getPedidoCostValues(p);
     return [
@@ -1747,7 +1916,7 @@ function exportCSV(){
       (p.materiais||[]).reduce((s,m)=>s+(m.gramas||0),0),
       p.horas,p.costSnapshot?.maoObraHoras ?? p.maoObraHoras ?? 0,p.costSnapshot?.addons ?? p.addons ?? 0,getPedidoAddOns(p).map(addOn=>`${addOn.nome}: ${addOn.valor.toFixed(2)} EUR`).join(' + '),
       costs.custoFilamento.toFixed(4),costs.custoEletricidade.toFixed(4),costs.custoMaquina.toFixed(4),costs.custoMaoObra.toFixed(4),costs.custoPosProcessamento.toFixed(4),costs.custoEnvio.toFixed(4),costs.descontoValor.toFixed(4),costs.custoFinal.toFixed(4),costs.precoVenda.toFixed(4),
-      p.recebido!==null?p.recebido:'', p.recebido!==null?(p.recebido-costs.custoFinal).toFixed(4):'', p.data||''
+      p.recebido!==null?p.recebido:'', p.recebido!==null?(p.recebido-costs.custoFinal).toFixed(4):'', getPedidoAttachments(p).length, getPedidoAttachments(p).map(anexo=>anexo.nome).join(' | '), p.data||''
     ];
   });
   const csv = [headers.join(';'), ...rows.map(r=>r.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(';'))].join('\n');
@@ -1820,6 +1989,18 @@ function confirmPermanentDeletePedido(id){
   render();
 }
 async function permanentlyDeletePedido(pedidoId){
+  const pedido = state.pedidos.find(p=>p.id===pedidoId);
+  if(!pedido) return;
+  const attachmentPaths = getPedidoAttachments(pedido).map(anexo=>anexo.path);
+  try{
+    for(let i=0;i<attachmentPaths.length;i+=100){
+      await attachmentApi('delete_paths', {paths:attachmentPaths.slice(i,i+100)});
+    }
+  }catch(error){
+    console.error('Não foi possível eliminar os anexos do registo', error);
+    toast('Não foi possível eliminar os anexos. Tenta novamente.');
+    return;
+  }
   state.pedidos = state.pedidos.filter(p=>p.id!==pedidoId);
   if (window.AutoSave) window.AutoSave.schedule();
   await savePedidos();
@@ -1864,6 +2045,7 @@ async function doDuplicatePedido(){
     projeto: m.nome.trim(),
     materiais: materiaisSnapshot,
     addons, addOns:addOns.map(addOn=>({...addOn})),
+    anexos:[],
     cliente:'', contacto:'', prazo:null,
     recebido: null, status:'orcamento', producaoStatus:'por_planear', data: todayISO(),
     costSnapshot:null
@@ -2344,7 +2526,7 @@ function renderCfg(){
         <button class="btn btn-ghost btn-sm" onclick="document.getElementById('backupFileInput').click()">${ICONS.copy} Importar cópia (.json)</button>
         <input type="file" id="backupFileInput" accept="application/json" style="display:none;" onchange="importBackup(this.files[0])">
       </div>
-      <div class="hint" style="margin-top:10px;">Importar substitui por completo os filamentos, histórico e definições no espaço atual.</div>
+      <div class="hint" style="margin-top:10px;">Importar substitui por completo os filamentos, histórico e definições no espaço atual. A cópia JSON inclui a lista de anexos, mas não inclui os ficheiros guardados no Storage.</div>
     </div>
   `;
 }
@@ -2548,6 +2730,12 @@ function renderModal(){
       {label:'Confirmar venda', cls:'btn-accent', action:'confirmVenda()'}
     ]);
   }
+  if(m.type==='deleteAttachment'){
+    return modalWrap('Eliminar anexo', `<p style="color:var(--text-dim);font-size:13.5px;line-height:1.5;">Tens a certeza que queres eliminar definitivamente <b>${escapeHtml(m.nome)}</b>? O ficheiro será removido do armazenamento e não pode ser recuperado.</p>`, [
+      {label:'Cancelar', cls:'btn-ghost', action:'cancelDeletePedidoAttachment()'},
+      {label:'Eliminar anexo', cls:'btn-danger', action:'deletePedidoAttachment()'}
+    ]);
+  }
   if(m.type==='editPedido'){
     const f = m.form;
     f.addOns = normalizeAddOns(f.addOns, f.addons);
@@ -2602,6 +2790,7 @@ function renderModal(){
           <option value="pronto" ${f.producaoStatus==='pronto'?'selected':''}>Pronto</option>
         </select>
       </div>
+      ${pedidoAttachmentsHtml(pedido, m)}
     `, [
       {label:'Cancelar', cls:'btn-ghost', action:'closeModal()'},
       {label:'Guardar', cls:'btn-accent', action:'saveEditPedido()'}
