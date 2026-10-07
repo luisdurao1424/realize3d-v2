@@ -14,11 +14,15 @@ const ICONS = {
   euro: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 6.5a6 6 0 100 11"/><line x1="3" y1="10" x2="14" y2="10"/><line x1="3" y1="14" x2="12" y2="14"/></svg>',
   box: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/></svg>',
   copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>',
+  dashboard: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>',
+  workflow: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="6" height="6" rx="1"/><rect x="15" y="15" width="6" height="6" rx="1"/><path d="M9 6h4a2 2 0 012 2v7M15 18h-4a2 2 0 01-2-2V9"/></svg>',
 };
 
 const DEFAULT_CONFIG = {
   consumoMedio: 0.19,   // kWh/h
   custoEletricidade: 0.22, // €/kWh
+  custoMaquinaHora: 0,
+  custoMaoObraHora: 0,
   taxaFalhas: 0.10,     // fraction
   margemLucro: 2.00     // fraction (multiplier over cost)
 };
@@ -78,14 +82,20 @@ const SEED_PEDIDOS_RAW = [
 ];
 
 let state = {
-  view:'calc',
+  view:'dash',
   config: DEFAULT_CONFIG,
   filamentos: [],
   pedidos: [],
-  calc: {projeto:'', materiais:[{id:'m0', filKey:'', gramas:''}], horas:'', addons:'', addOns:[{id:'a0', nome:'', valor:''}], taxaFalhas:null, margemLucro:null},
+  calc: {
+    projeto:'', cliente:'', contacto:'', prazo:'',
+    materiais:[{id:'m0', filKey:'', gramas:''}], horas:'',
+    addons:'', addOns:[{id:'a0', nome:'', valor:''}],
+    maoObraHoras:'', posProcessamento:'', descontoPct:'', custoEnvio:0, envio:null,
+    taxaFalhas:null, margemLucro:null
+  },
   hist: {search:'', status:'todos', sort:'data_desc'},
   fil: {search:'', material:'todos', status:'ativos', sort:'recentes'},
-  shipping: {service:'normal', weight:'', cod:false, codAmount:'', receipt:false, electronic:false, own:false, vatRate:0.23},
+  shipping: {service:'normal', weight:'', cod:false, codAmount:'', receipt:false, electronic:false, own:false, vatRate:0.23, pedidoId:''},
   modal: null, // {type, data}
   sidebarOpen:false,
 };
@@ -184,7 +194,7 @@ function defaultPayload(){
   return { config:{...DEFAULT_CONFIG}, filamentos:migrateFilamentosToLotes(SEED_FILAMENTOS), pedidos:buildSeedPedidos() };
 }
 function applyPayload(payload){
-  state.config = payload.config || {...DEFAULT_CONFIG};
+  state.config = {...DEFAULT_CONFIG, ...(payload.config || {})};
   state.filamentos = payload.filamentos || SEED_FILAMENTOS;
   migrateFilamentosToLotes();
   state.pedidos = payload.pedidos || [];
@@ -488,7 +498,7 @@ function validateAddOns(addOns){
   return '';
 }
 
-function buildCostSnapshot({materiais, horas, addons, addOns, taxaFalhas, margemLucro, breakdown}){
+function buildCostSnapshot({materiais, horas, addons, addOns, taxaFalhas, margemLucro, maoObraHoras=0, posProcessamento=0, descontoPct=0, custoEnvio=0, envio=null, breakdown}){
   const mats = materiais || [];
   const first = mats[0] || {};
   // Snapshots preserve historical cost values and must not be recalculated when filament lot prices change.
@@ -503,8 +513,17 @@ function buildCostSnapshot({materiais, horas, addons, addOns, taxaFalhas, margem
     horas:parseFloat(horas)||0,
     addons:parseFloat(addons)||0,
     addOns:getStoredAddOns(addOns, addons),
+    maoObraHoras:parseFloat(maoObraHoras)||0,
+    posProcessamento:parseFloat(posProcessamento)||0,
+    descontoPct:parseFloat(descontoPct)||0,
+    custoEnvio:parseFloat(custoEnvio)||0,
+    envio:envio ? {...envio} : null,
     custoFilamento:breakdown.custoFilamento,
     custoEletricidade:breakdown.custoEletricidade,
+    custoMaquina:breakdown.custoMaquina,
+    custoMaoObra:breakdown.custoMaoObra,
+    custoPosProcessamento:breakdown.custoPosProcessamento,
+    descontoValor:breakdown.descontoValor,
     custoTotal:breakdown.custoFinal,
     custoFinal:breakdown.custoFinal,
     precoFinal:breakdown.precoVenda,
@@ -537,6 +556,11 @@ function getPedidoCostValues(p){
     return {
       custoFilamento:snap.custoFilamento ?? p.custoFilamento ?? 0,
       custoEletricidade:snap.custoEletricidade ?? p.custoEletricidade ?? 0,
+      custoMaquina:snap.custoMaquina ?? p.custoMaquina ?? 0,
+      custoMaoObra:snap.custoMaoObra ?? p.custoMaoObra ?? 0,
+      custoPosProcessamento:snap.custoPosProcessamento ?? p.custoPosProcessamento ?? 0,
+      custoEnvio:snap.custoEnvio ?? p.custoEnvio ?? 0,
+      descontoValor:snap.descontoValor ?? p.descontoValor ?? 0,
       custoFinal:snap.custoFinal ?? snap.custoTotal ?? p.custoFinal ?? 0,
       precoVenda:snap.precoVenda ?? snap.precoFinal ?? p.precoVenda ?? 0,
       lucroValor:snap.lucroValor ?? snap.lucro ?? p.lucroValor ?? 0,
@@ -547,6 +571,11 @@ function getPedidoCostValues(p){
   return {
     custoFilamento:p?.custoFilamento ?? 0,
     custoEletricidade:p?.custoEletricidade ?? 0,
+    custoMaquina:p?.custoMaquina ?? 0,
+    custoMaoObra:p?.custoMaoObra ?? 0,
+    custoPosProcessamento:p?.custoPosProcessamento ?? 0,
+    custoEnvio:p?.custoEnvio ?? 0,
+    descontoValor:p?.descontoValor ?? 0,
     custoFinal:p?.custoFinal ?? 0,
     precoVenda:p?.precoVenda ?? 0,
     lucroValor:p?.lucroValor ?? 0,
@@ -622,6 +651,10 @@ function sameCostInputs(p, form){
   }
   if(!sameNumber(p.horas, form.horas)) return false;
   if(!sameNumber(p.costSnapshot?.addons ?? p.addons, getAddOnsTotal(form.addOns, form.addons))) return false;
+  if(!sameNumber(p.costSnapshot?.maoObraHoras ?? p.maoObraHoras, form.maoObraHoras)) return false;
+  if(!sameNumber(p.costSnapshot?.posProcessamento ?? p.posProcessamento, form.posProcessamento)) return false;
+  if(!sameNumber(p.costSnapshot?.descontoPct ?? p.descontoPct, form.descontoPct)) return false;
+  if(!sameNumber(p.costSnapshot?.custoEnvio ?? p.custoEnvio, form.custoEnvio)) return false;
   if('taxaFalhas' in form && !sameNumber(p.taxaFalhas, form.taxaFalhas)) return false;
   if('bufferFalhas' in form && !sameNumber(p.bufferFalhas, form.bufferFalhas)) return false;
   if('margemLucro' in form && !sameNumber(p.margemLucro, form.margemLucro)) return false;
@@ -634,6 +667,11 @@ function sameCostInputs(p, form){
 function applyPedidoBreakdown(pedido, b){
   pedido.custoFilamento = b.custoFilamento;
   pedido.custoEletricidade = b.custoEletricidade;
+  pedido.custoMaquina = b.custoMaquina;
+  pedido.custoMaoObra = b.custoMaoObra;
+  pedido.custoPosProcessamento = b.custoPosProcessamento;
+  pedido.custoEnvio = b.custoEnvio;
+  pedido.descontoValor = b.descontoValor;
   pedido.custoFinal = b.custoFinal;
   pedido.bufferFalhas = b.bufferFalhas;
   pedido.lucroValor = b.lucroValor;
@@ -702,19 +740,30 @@ function archiveLoteFilamento(filamentoId, loteId){
 function getPrecoKg(f){ return getPrecoKgFilamento(f); }
 
 // materiais: array of {marca,cor,gramas,precoKg} - one print job can use several filaments/colors
-function calcBreakdown({materiais,horas,addons,taxaFalhas,margemLucro}){
+function calcBreakdown({materiais,horas,addons,taxaFalhas,margemLucro,maoObraHoras=0,posProcessamento=0,descontoPct=0,custoEnvio=0}){
   materiais = materiais || [];
   horas = parseFloat(horas)||0;
   addons = parseFloat(addons)||0;
   taxaFalhas = parseFloat(taxaFalhas); if(isNaN(taxaFalhas)) taxaFalhas = 0;
   margemLucro = parseFloat(margemLucro); if(isNaN(margemLucro)) margemLucro = 0;
+  maoObraHoras = parseFloat(maoObraHoras)||0;
+  posProcessamento = parseFloat(posProcessamento)||0;
+  descontoPct = Math.min(100, Math.max(0, parseFloat(descontoPct)||0));
+  custoEnvio = parseFloat(custoEnvio)||0;
   const custoFilamento = materiais.reduce((s,m)=> s + ((parseFloat(m.gramas)||0) * (parseFloat(m.precoKg)||0))/1000, 0);
   const custoEletricidade = horas * ((state.config?.consumoMedio ?? DEFAULT_CONFIG.consumoMedio)||0) * ((state.config?.custoEletricidade ?? DEFAULT_CONFIG.custoEletricidade)||0);
-  const custoFinal = addons + custoFilamento + custoEletricidade;
-  const bufferFalhas = custoFinal * taxaFalhas;
-  const lucroValor = custoFinal * margemLucro;
-  const precoVenda = custoFinal + bufferFalhas + lucroValor;
-  return {custoFilamento,custoEletricidade,addons,custoFinal,bufferFalhas,lucroValor,precoVenda,taxaFalhas,margemLucro};
+  const custoMaquina = horas * ((state.config?.custoMaquinaHora ?? DEFAULT_CONFIG.custoMaquinaHora)||0);
+  const custoMaoObra = maoObraHoras * ((state.config?.custoMaoObraHora ?? DEFAULT_CONFIG.custoMaoObraHora)||0);
+  const custoPosProcessamento = posProcessamento;
+  const custoOperacional = addons + custoFilamento + custoEletricidade + custoMaquina + custoMaoObra + custoPosProcessamento;
+  const custoFinal = custoOperacional + custoEnvio;
+  const bufferFalhas = custoOperacional * taxaFalhas;
+  const lucroAntesDesconto = custoOperacional * margemLucro;
+  const subtotal = custoOperacional + bufferFalhas + lucroAntesDesconto + custoEnvio;
+  const descontoValor = subtotal * (descontoPct/100);
+  const precoVenda = Math.max(0, subtotal - descontoValor);
+  const lucroValor = precoVenda - custoFinal - bufferFalhas;
+  return {custoFilamento,custoEletricidade,custoMaquina,custoMaoObra,custoPosProcessamento,custoEnvio,addons,custoOperacional,custoFinal,bufferFalhas,lucroValor,descontoValor,precoVenda,taxaFalhas,margemLucro};
 }
 
 /* ---------------------------------------------------------------
@@ -732,7 +781,9 @@ function toast(msg){
    NAV
 --------------------------------------------------------------- */
 const NAV = [
+  {id:'dash', label:'Dashboard', icon:'dashboard'},
   {id:'calc', label:'Calculadora', icon:'calc'},
+  {id:'prod', label:'Produção', icon:'workflow'},
   {id:'hist', label:'Histórico', icon:'hist'},
   {id:'fil', label:'Filamentos', icon:'fil'},
   {id:'ship', label:'Envios', icon:'box'},
@@ -762,6 +813,163 @@ function renderSidebar(){
     <div class="stat"><span>impressões registadas</span><b>${totalPedidos}</b></div>
     <div class="stat"><span>vendidas</span><b>${vendidos}</b></div>
     <div class="stat"><span>bobinas em uso</span><b>${state.filamentos.filter(f=>!f.arquivado).length}</b></div>
+  `;
+}
+
+function getProductionStatusView(p){
+  const map = {
+    por_planear:{id:'por_planear', label:'Por planear', cls:'badge-orc'},
+    em_fila:{id:'em_fila', label:'Em fila', cls:'badge-queue'},
+    a_imprimir:{id:'a_imprimir', label:'A imprimir', cls:'badge-printing'},
+    pronto:{id:'pronto', label:'Pronto', cls:'badge-ready'}
+  };
+  return map[p?.producaoStatus] || map.por_planear;
+}
+
+function hasProductionTracking(p){
+  const status = getPedidoStatusView(p).id;
+  return Boolean(p?.producaoStatus) || status==='orcamento' || status==='vendido';
+}
+
+function isPedidoOverdue(p){
+  if(!p?.prazo || p.deleted === true || getPedidoStatusView(p).id === 'entregue') return false;
+  const deadline = new Date(`${p.prazo}T23:59:59`);
+  return Number.isFinite(deadline.getTime()) && deadline.getTime() < Date.now();
+}
+
+function monthKey(date){
+  if(!date) return '';
+  const d = new Date(`${date}T12:00:00`);
+  if(!Number.isFinite(d.getTime())) return '';
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+}
+
+function monthLabel(key){
+  const [year,month] = key.split('-').map(Number);
+  return new Intl.DateTimeFormat('pt-PT',{month:'short',year:'2-digit'}).format(new Date(year,month-1,1));
+}
+
+function getDashboardData(){
+  const pedidos = state.pedidos.filter(p=>p.deleted !== true);
+  const currentMonth = monthKey(todayISO());
+  const vendidosMes = pedidos.filter(p=>monthKey(p.data)===currentMonth && p.recebido!==null && p.recebido!==undefined);
+  const faturacaoMes = vendidosMes.reduce((sum,p)=>sum+(parseFloat(p.recebido)||0),0);
+  const lucroMes = vendidosMes.reduce((sum,p)=>sum+((parseFloat(p.recebido)||0)-getPedidoCostValues(p).custoFinal),0);
+  const emAberto = pedidos.filter(p=>{
+    const status = getPedidoStatusView(p).id;
+    return hasProductionTracking(p);
+  }).length;
+  const porReceber = pedidos.reduce((sum,p)=>{
+    const status = getPedidoStatusView(p).id;
+    if(status==='orcamento' || status==='entregue') return sum;
+    return sum + Math.max(0, getPedidoCostValues(p).precoVenda-(parseFloat(p.recebido)||0));
+  },0);
+
+  const monthly = [];
+  const now = new Date();
+  for(let i=5;i>=0;i--){
+    const d = new Date(now.getFullYear(),now.getMonth()-i,1);
+    const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+    const rows = pedidos.filter(p=>monthKey(p.data)===key && p.recebido!==null && p.recebido!==undefined);
+    monthly.push({
+      key,
+      faturacao:rows.reduce((sum,p)=>sum+(parseFloat(p.recebido)||0),0),
+      lucro:rows.reduce((sum,p)=>sum+((parseFloat(p.recebido)||0)-getPedidoCostValues(p).custoFinal),0)
+    });
+  }
+
+  const clientes = new Map();
+  pedidos.forEach(p=>{
+    const cliente = getPedidoCliente(p).trim();
+    if(!cliente) return;
+    const entry = clientes.get(cliente) || {cliente,total:0,pedidos:0};
+    entry.total += parseFloat(p.recebido)||0;
+    entry.pedidos += 1;
+    clientes.set(cliente,entry);
+  });
+  const melhoresClientes = [...clientes.values()].sort((a,b)=>b.total-a.total || b.pedidos-a.pedidos).slice(0,5);
+  const atrasados = pedidos.filter(isPedidoOverdue).sort((a,b)=>String(a.prazo).localeCompare(String(b.prazo)));
+  return {pedidos,faturacaoMes,lucroMes,emAberto,porReceber,monthly,melhoresClientes,atrasados};
+}
+
+function renderDashboard(){
+  const d = getDashboardData();
+  const maxMonthly = Math.max(1,...d.monthly.map(m=>m.faturacao));
+  return `
+    <div class="page-head">
+      <div><h1>Dashboard</h1><p>Visão geral comercial e operacional da Realize 3D.</p></div>
+      <button class="btn btn-accent btn-sm" onclick="switchView('calc')">${ICONS.plus} Novo orçamento</button>
+    </div>
+    <div class="stat-cards dashboard-stats">
+      <div class="stat-card stat-card-main"><div class="k">Faturação este mês</div><div class="v">${fmtEUR(d.faturacaoMes)}</div></div>
+      <div class="stat-card"><div class="k">Lucro este mês</div><div class="v ${d.lucroMes>=0?'pos':'neg'}">${fmtEUR(d.lucroMes)}</div></div>
+      <div class="stat-card"><div class="k">Encomendas em aberto</div><div class="v">${d.emAberto}</div></div>
+      <div class="stat-card"><div class="k">Valor por receber</div><div class="v">${fmtEUR(d.porReceber)}</div></div>
+    </div>
+    <div class="dashboard-grid">
+      <section class="card dashboard-panel">
+        <h2><span class="dot"></span>Faturação e lucro por mês</h2>
+        <div class="monthly-chart">
+          ${d.monthly.map(m=>`<div class="monthly-row">
+            <span>${escapeHtml(monthLabel(m.key))}</span>
+            <div class="monthly-track"><i style="width:${Math.max(2,(m.faturacao/maxMonthly)*100)}%"></i></div>
+            <b>${fmtEUR(m.faturacao)}</b><em class="${m.lucro>=0?'pos':'neg'}">${fmtEUR(m.lucro)}</em>
+          </div>`).join('')}
+        </div>
+      </section>
+      <section class="card dashboard-panel">
+        <h2><span class="dot" style="background:var(--teal)"></span>Melhores clientes</h2>
+        ${d.melhoresClientes.length ? `<div class="rank-list">${d.melhoresClientes.map((c,i)=>`<div><span><b>${i+1}</b>${escapeHtml(c.cliente)}</span><small>${c.pedidos} pedido${c.pedidos===1?'':'s'}</small><strong>${fmtEUR(c.total)}</strong></div>`).join('')}</div>` : `<div class="empty-compact">Os novos pedidos com cliente aparecem aqui.</div>`}
+      </section>
+    </div>
+    <section class="card dashboard-panel overdue-panel">
+      <div class="panel-head"><h2><span class="dot" style="background:var(--coral)"></span>Prazos atrasados</h2><button class="btn btn-ghost btn-sm" onclick="switchView('prod')">Ver produção</button></div>
+      ${d.atrasados.length ? `<div class="deadline-list">${d.atrasados.map(p=>`<button onclick="openEditPedidoModal('${p.id}')"><span><strong>${escapeHtml(p.projeto)}</strong><small>${escapeHtml(getPedidoCliente(p)||'Sem cliente')}</small></span><b>${fmtDate(p.prazo)}</b><i>${getProductionStatusView(p).label}</i></button>`).join('')}</div>` : `<div class="empty-compact">Não existem pedidos atrasados.</div>`}
+    </section>
+  `;
+}
+
+async function setPedidoProductionStatus(id, status){
+  const pedido = state.pedidos.find(p=>p.id===id);
+  if(!pedido) return;
+  pedido.producaoStatus = status;
+  if(window.AutoSave) window.AutoSave.schedule();
+  await savePedidos();
+  render();
+}
+
+function renderProduction(){
+  const pedidos = state.pedidos.filter(p=>{
+    if(p.deleted===true || getPedidoStatusView(p).id==='entregue') return false;
+    return hasProductionTracking(p);
+  });
+  const columns = [
+    {id:'por_planear',label:'Por planear'},
+    {id:'em_fila',label:'Em fila'},
+    {id:'a_imprimir',label:'A imprimir'},
+    {id:'pronto',label:'Pronto'}
+  ];
+  return `
+    <div class="page-head"><div><h1>Produção</h1><p>Acompanha cada encomenda desde o planeamento até ficar pronta.</p></div></div>
+    <div class="kanban-board">
+      ${columns.map(column=>{
+        const items = pedidos.filter(p=>getProductionStatusView(p).id===column.id);
+        return `<section class="kanban-column">
+          <header><span>${column.label}</span><b>${items.length}</b></header>
+          <div class="kanban-items">
+            ${items.length ? items.map(p=>`<article class="kanban-card ${isPedidoOverdue(p)?'overdue':''}">
+              <div class="kanban-title"><strong>${escapeHtml(p.projeto||'Pedido sem nome')}</strong>${p.prazo?`<time>${fmtDate(p.prazo)}</time>`:''}</div>
+              <p>${escapeHtml(getPedidoCliente(p)||'Sem cliente')}${p.contacto?` · ${escapeHtml(p.contacto)}`:''}</p>
+              <div class="kanban-meta"><span>${fmtTempoHoras(p.horas)}</span><b>${fmtEUR(getPedidoCostValues(p).precoVenda)}</b></div>
+              <select aria-label="Estado de produção" onchange="setPedidoProductionStatus('${p.id}',this.value)">
+                ${columns.map(option=>`<option value="${option.id}" ${option.id===column.id?'selected':''}>${option.label}</option>`).join('')}
+              </select>
+              <button class="btn btn-ghost btn-sm" onclick="openEditPedidoModal('${p.id}')">${ICONS.edit} Editar</button>
+            </article>`).join('') : `<div class="kanban-empty">Sem pedidos</div>`}
+          </div>
+        </section>`;
+      }).join('')}
+    </div>
   `;
 }
 
@@ -803,6 +1011,11 @@ function renderCalc(){
             <label>Nome do projeto</label>
             <input type="text" id="in_projeto" placeholder="ex: Hogwarts globo" value="${escapeHtml(c.projeto)}" oninput="state.calc.projeto=this.value">
           </div>
+          <div class="row2">
+            <div class="field"><label>Cliente</label><input type="text" placeholder="Nome do cliente" value="${escapeHtml(c.cliente)}" oninput="state.calc.cliente=this.value"></div>
+            <div class="field"><label>Contacto</label><input type="text" placeholder="Telefone ou email" value="${escapeHtml(c.contacto)}" oninput="state.calc.contacto=this.value"></div>
+          </div>
+          <div class="field"><label>Prazo de entrega</label><input type="date" value="${escapeHtml(c.prazo)}" oninput="state.calc.prazo=this.value"></div>
           <div class="field">
             <label>Filamentos</label>
             <div id="materialRows">
@@ -815,9 +1028,15 @@ function renderCalc(){
 
         <div class="calc-section">
           <h3>Tempo de impressão</h3>
-          <div class="field">
-            <label>Tempo de impressão (total)</label>
-            <div class="unit-input"><input type="number" min="0" step="any" id="in_horas" placeholder="0" value="${c.horas}" oninput="state.calc.horas=this.value; updateCalcPreview();"><span>h</span></div>
+          <div class="row2">
+            <div class="field">
+              <label>Tempo de impressão</label>
+              <div class="unit-input"><input type="number" min="0" step="any" id="in_horas" placeholder="0" value="${c.horas}" oninput="state.calc.horas=this.value; updateCalcPreview();"><span>h</span></div>
+            </div>
+            <div class="field">
+              <label>Tempo de mão de obra</label>
+              <div class="unit-input"><input type="number" min="0" step="any" placeholder="0" value="${c.maoObraHoras}" oninput="state.calc.maoObraHoras=this.value; updateCalcPreview();"><span>h</span></div>
+            </div>
           </div>
         </div>
 
@@ -830,6 +1049,10 @@ function renderCalc(){
             </div>
             <button type="button" class="btn btn-ghost btn-sm" onclick="calcAddAddOn()">${ICONS.plus} Adicionar add-on</button>
           </div>
+          <div class="row2">
+            <div class="field"><label>Pós-processamento</label><div class="unit-input"><input type="number" min="0" step="any" value="${c.posProcessamento}" oninput="state.calc.posProcessamento=this.value;updateCalcPreview()"><span>€</span></div></div>
+            <div class="field"><label>Custo de envio</label><div class="unit-input"><input type="number" min="0" step="any" value="${c.custoEnvio||''}" oninput="state.calc.custoEnvio=this.value;state.calc.envio=null;updateCalcPreview()"><span>€</span></div>${c.envio?`<div class="hint">${escapeHtml(c.envio.service)} · ${fmtNum(c.envio.weight)} g</div>`:`<div class="hint"><a href="#" onclick="switchView('ship');return false;">Calcular nos Envios</a></div>`}</div>
+          </div>
           <div class="field">
             <label>Taxa de falhas</label>
             <div class="unit-input"><input type="number" min="0" step="any" id="in_taxa" placeholder="${fmtNum(taxaDefault)}" value="${c.taxaFalhas===null?'':c.taxaFalhas}" oninput="state.calc.taxaFalhas=this.value; updateCalcPreview();"><span>%</span></div>
@@ -839,10 +1062,16 @@ function renderCalc(){
 
         <div class="calc-section">
           <h3>Margem / preço final</h3>
-          <div class="field">
-            <label>Margem de lucro</label>
-            <div class="unit-input"><input type="number" min="0" step="any" id="in_lucro" placeholder="${fmtNum(lucroDefault)}" value="${c.margemLucro===null?'':c.margemLucro}" oninput="state.calc.margemLucro=this.value; updateCalcPreview();"><span>%</span></div>
-            <div class="hint">Vazio = usa definição global (${fmtNum(lucroDefault)}%)</div>
+          <div class="row2">
+            <div class="field">
+              <label>Margem de lucro</label>
+              <div class="unit-input"><input type="number" min="0" step="any" id="in_lucro" placeholder="${fmtNum(lucroDefault)}" value="${c.margemLucro===null?'':c.margemLucro}" oninput="state.calc.margemLucro=this.value; updateCalcPreview();"><span>%</span></div>
+              <div class="hint">Vazio = usa definição global (${fmtNum(lucroDefault)}%)</div>
+            </div>
+            <div class="field">
+              <label>Desconto</label>
+              <div class="unit-input"><input type="number" min="0" max="100" step="any" value="${c.descontoPct}" oninput="state.calc.descontoPct=this.value;updateCalcPreview()"><span>%</span></div>
+            </div>
           </div>
         </div>
 
@@ -963,7 +1192,13 @@ function currentCalcInputs(){
   const addons = getAddOnsTotal(c.addOns, c.addons);
   const taxaFalhas = (c.taxaFalhas===null || c.taxaFalhas==='') ? state.config.taxaFalhas : (parseFloat(c.taxaFalhas)/100);
   const margemLucro = (c.margemLucro===null || c.margemLucro==='') ? state.config.margemLucro : (parseFloat(c.margemLucro)/100);
-  return {materiais, horas:c.horas, addons, addOns, taxaFalhas, margemLucro};
+  return {
+    materiais, horas:c.horas, addons, addOns, taxaFalhas, margemLucro,
+    maoObraHoras:c.maoObraHoras,
+    posProcessamento:c.posProcessamento,
+    descontoPct:c.descontoPct,
+    custoEnvio:c.custoEnvio
+  };
 }
 
 function layerHtml(label, value, total, color){
@@ -975,8 +1210,9 @@ function layerHtml(label, value, total, color){
 }
 
 function updateCalcPreview(){
-  const {materiais,horas,addons,addOns,taxaFalhas,margemLucro} = currentCalcInputs();
-  const b = calcBreakdown({materiais,horas,addons,taxaFalhas,margemLucro});
+  const inputs = currentCalcInputs();
+  const {materiais,addOns,taxaFalhas,margemLucro} = inputs;
+  const b = calcBreakdown(inputs);
   const total = b.precoVenda;
   const target = document.getElementById('calcPreview');
   if(!target) return;
@@ -995,11 +1231,16 @@ function updateCalcPreview(){
     <div class="calc-summary-grid">
       <div class="calc-summary-card"><span>Custo filamento</span><b>${fmtEUR(b.custoFilamento)}</b></div>
       <div class="calc-summary-card"><span>Eletricidade</span><b>${fmtEUR(b.custoEletricidade)}</b></div>
+      <div class="calc-summary-card"><span>Desgaste máquina</span><b>${fmtEUR(b.custoMaquina)}</b></div>
+      <div class="calc-summary-card"><span>Mão de obra</span><b>${fmtEUR(b.custoMaoObra)}</b></div>
+      <div class="calc-summary-card"><span>Pós-processamento</span><b>${fmtEUR(b.custoPosProcessamento)}</b></div>
+      <div class="calc-summary-card"><span>Envio</span><b>${fmtEUR(b.custoEnvio)}</b></div>
       <div class="calc-summary-card"><span>Taxa de falhas</span><b>${fmtEUR(b.bufferFalhas)}</b></div>
       <div class="calc-summary-card"><span>Add-ons</span><b>${fmtEUR(b.addons)}</b></div>
       <div class="calc-summary-card"><span>Custo total</span><b>${fmtEUR(b.custoFinal)}</b></div>
       <div class="calc-summary-card highlight"><span>Preço sugerido</span><b>${fmtEUR(b.precoVenda)}</b></div>
-      <div class="calc-summary-card"><span>Lucro estimado</span><b class="pos">${fmtEUR(b.lucroValor)}</b></div>
+      <div class="calc-summary-card"><span>Lucro estimado</span><b class="${b.lucroValor>=0?'pos':'neg'}">${fmtEUR(b.lucroValor)}</b></div>
+      ${b.descontoValor>0?`<div class="calc-summary-card"><span>Desconto</span><b class="neg">-${fmtEUR(b.descontoValor)}</b></div>`:''}
     </div>
     <div class="calc-final-card">
       <span>Resumo final</span>
@@ -1034,6 +1275,10 @@ function updateCalcPreview(){
         ${layerHtml('Margem falhas', b.bufferFalhas, total, 'var(--coral)')}
         ${layerHtml('Add-ons', b.addons, total, 'var(--blue)')}
         ${layerHtml('Eletricidade', b.custoEletricidade, total, 'var(--violet)')}
+        ${layerHtml('Desgaste', b.custoMaquina, total, '#8d9a96')}
+        ${layerHtml('Mão de obra', b.custoMaoObra, total, '#d6a345')}
+        ${layerHtml('Pós-processamento', b.custoPosProcessamento, total, '#59a5a8')}
+        ${layerHtml('Envio', b.custoEnvio, total, '#397fc2')}
         ${layerHtml('Filamento', b.custoFilamento, total, 'var(--accent)')}
       </div>
       <div class="stack-total">
@@ -1044,10 +1289,15 @@ function updateCalcPreview(){
         <div class="legend-row"><span class="sw" style="background:var(--accent);"></span><span class="k">Filamento</span><span class="v">${fmtEUR(b.custoFilamento)}</span></div>
         ${validMateriais.map(m=>`<div class="legend-row" style="padding-left:17px;font-size:11px;"><span class="k muted">${escapeHtml(m.marca)} ${escapeHtml(m.cor)} · ${fmtNum(m.gramas)}g</span><span class="v muted">${fmtEUR((m.gramas*m.precoKg)/1000)}</span></div>`).join('')}
         <div class="legend-row"><span class="sw" style="background:var(--violet);"></span><span class="k">Eletricidade</span><span class="v">${fmtEUR(b.custoEletricidade)}</span></div>
+        <div class="legend-row"><span class="sw" style="background:#8d9a96;"></span><span class="k">Desgaste da máquina</span><span class="v">${fmtEUR(b.custoMaquina)}</span></div>
+        <div class="legend-row"><span class="sw" style="background:#d6a345;"></span><span class="k">Mão de obra</span><span class="v">${fmtEUR(b.custoMaoObra)}</span></div>
+        <div class="legend-row"><span class="sw" style="background:#59a5a8;"></span><span class="k">Pós-processamento</span><span class="v">${fmtEUR(b.custoPosProcessamento)}</span></div>
+        <div class="legend-row"><span class="sw" style="background:#397fc2;"></span><span class="k">Envio</span><span class="v">${fmtEUR(b.custoEnvio)}</span></div>
         <div class="legend-row"><span class="sw" style="background:var(--blue);"></span><span class="k">Add-ons</span><span class="v">${fmtEUR(b.addons)}</span></div>
         <div class="legend-row sub"><span class="k">Custo final</span><span class="v">${fmtEUR(b.custoFinal)}</span></div>
         <div class="legend-row"><span class="sw" style="background:var(--coral);"></span><span class="k">Margem de falhas (${fmtPct(taxaFalhas)})</span><span class="v">${fmtEUR(b.bufferFalhas)}</span></div>
         <div class="legend-row"><span class="sw" style="background:var(--teal);"></span><span class="k">Lucro (${fmtPct(margemLucro)})</span><span class="v">${fmtEUR(b.lucroValor)}</span></div>
+        ${b.descontoValor>0?`<div class="legend-row"><span class="sw" style="background:var(--coral);"></span><span class="k">Desconto</span><span class="v">-${fmtEUR(b.descontoValor)}</span></div>`:''}
       </div>
     </div>
   `;
@@ -1057,22 +1307,27 @@ async function saveCalcToHistory(){
   const c = state.calc;
   const addOnError = validateAddOns(c.addOns);
   if(addOnError){ toast(addOnError); return; }
-  const {materiais,horas,addons,addOns,taxaFalhas,margemLucro} = currentCalcInputs();
+  const inputs = currentCalcInputs();
+  const {materiais,horas,addons,addOns,taxaFalhas,margemLucro,maoObraHoras,posProcessamento,descontoPct,custoEnvio} = inputs;
   const validMateriais = materiais.filter(m=>m.marca && m.gramas>0);
   if(validMateriais.length===0){ toast('Escolhe pelo menos um filamento e indica as gramas'); return; }
   if(!c.projeto || !c.projeto.trim()){ toast('Dá um nome ao projeto'); return; }
-  const b = calcBreakdown({materiais:validMateriais,horas,addons,taxaFalhas,margemLucro});
+  const b = calcBreakdown({...inputs, materiais:validMateriais});
   const pedidoMateriais = validMateriais.map(buildPedidoMaterialSnapshot);
   const pedido = {
-    id:uid(), projeto:c.projeto.trim(),
+    id:uid(), projeto:c.projeto.trim(), cliente:c.cliente.trim(), contacto:c.contacto.trim(), prazo:c.prazo||null,
     materiais: pedidoMateriais,
     horas:parseFloat(horas)||0, addons:parseFloat(addons)||0, addOns,
     taxaFalhas, margemLucro,
-    custoFilamento:b.custoFilamento, custoEletricidade:b.custoEletricidade, custoFinal:b.custoFinal,
+    maoObraHoras:parseFloat(maoObraHoras)||0, posProcessamento:parseFloat(posProcessamento)||0,
+    descontoPct:parseFloat(descontoPct)||0, custoEnvio:parseFloat(custoEnvio)||0, envio:c.envio?{...c.envio}:null,
+    producaoStatus:'por_planear',
+    custoFilamento:b.custoFilamento, custoEletricidade:b.custoEletricidade, custoMaquina:b.custoMaquina,
+    custoMaoObra:b.custoMaoObra, custoPosProcessamento:b.custoPosProcessamento, custoFinal:b.custoFinal,
     bufferFalhas:b.bufferFalhas, lucroValor:b.lucroValor,
     precoVenda:b.precoVenda, recebido:null, status:'orcamento', data:todayISO(), notas:''
   };
-  pedido.costSnapshot = buildCostSnapshot({materiais:pedidoMateriais, horas, addons, addOns, taxaFalhas, margemLucro, breakdown:b});
+  pedido.costSnapshot = buildCostSnapshot({materiais:pedidoMateriais, horas, addons, addOns, taxaFalhas, margemLucro, maoObraHoras, posProcessamento, descontoPct, custoEnvio, envio:c.envio, breakdown:b});
   state.pedidos.unshift(pedido);
   if (window.AutoSave) window.AutoSave.schedule();
   await savePedidos();
@@ -1080,7 +1335,13 @@ async function saveCalcToHistory(){
   clearCalc();
 }
 function clearCalc(){
-  state.calc = {projeto:'', materiais:[{id:uid(), filKey:'', gramas:''}], horas:'', addons:'', addOns:[{id:uid(), nome:'', valor:''}], taxaFalhas:null, margemLucro:null};
+  state.calc = {
+    projeto:'', cliente:'', contacto:'', prazo:'',
+    materiais:[{id:uid(), filKey:'', gramas:''}], horas:'',
+    addons:'', addOns:[{id:uid(), nome:'', valor:''}],
+    maoObraHoras:'', posProcessamento:'', descontoPct:'', custoEnvio:0, envio:null,
+    taxaFalhas:null, margemLucro:null
+  };
   render();
 }
 
@@ -1167,8 +1428,73 @@ function renderShippingQuote(){
     </div>
     <div class="shipping-total"><span>Total estimado</span><strong>${fmtEUR(quote.total)}</strong></div>
     ${quote.vat>0 ? `<div class="shipping-vat">Inclui ${fmtEUR(quote.vat)} de IVA nos serviços adicionais sujeitos.</div>` : ''}
+    <div class="shipping-actions">
+      <button class="btn btn-accent" onclick="useShippingInCalculator()">Usar no orçamento atual</button>
+      <div class="shipping-attach">
+        <select aria-label="Pedido para associar" onchange="state.shipping.pedidoId=this.value;renderShippingQuote()">
+          <option value="">Associar a um pedido…</option>
+          ${state.pedidos.filter(p=>p.deleted!==true).map(p=>`<option value="${p.id}" ${state.shipping.pedidoId===p.id?'selected':''}>${escapeHtml(p.projeto)}${getPedidoCliente(p)?` · ${escapeHtml(getPedidoCliente(p))}`:''}</option>`).join('')}
+        </select>
+        <button class="btn btn-ghost" onclick="attachShippingToPedido()" ${state.shipping.pedidoId?'':'disabled'}>Guardar no pedido</button>
+      </div>
+    </div>
     <div class="shipping-source">Preçário base CTT ${quote.tariffYear}. Confirma dimensões e condições no <a href="${shippingModule.CTT_TARIFF.source}" target="_blank" rel="noopener">preçário oficial</a>.</div>
   `;
+}
+
+function getShippingSnapshot(){
+  if(!shippingModule) return null;
+  const quote = shippingModule.calculateShippingQuote(state.shipping);
+  if(quote.error) return null;
+  return {
+    service:quote.service,
+    serviceId:state.shipping.service,
+    weight:quote.weight,
+    total:quote.total,
+    lines:quote.lines.map(line=>({...line})),
+    vat:quote.vat,
+    tariffYear:quote.tariffYear,
+    savedAt:new Date().toISOString()
+  };
+}
+
+function useShippingInCalculator(){
+  const envio = getShippingSnapshot();
+  if(!envio){ toast('Completa os dados do envio'); return; }
+  state.calc.custoEnvio = envio.total;
+  state.calc.envio = envio;
+  switchView('calc');
+  toast('Envio adicionado ao orçamento');
+}
+
+async function attachShippingToPedido(){
+  const envio = getShippingSnapshot();
+  const pedido = state.pedidos.find(p=>p.id===state.shipping.pedidoId);
+  if(!envio || !pedido){ toast('Seleciona um pedido e um envio válido'); return; }
+  const costs = getPedidoCostValues(pedido);
+  const previousShipping = costs.custoEnvio || 0;
+  const delta = envio.total - previousShipping;
+  const discountRate = Math.max(0, parseFloat(pedido.costSnapshot?.descontoPct ?? pedido.descontoPct)||0) / 100;
+  pedido.envio = envio;
+  pedido.custoEnvio = envio.total;
+  pedido.custoFinal = costs.custoFinal + delta;
+  pedido.precoVenda = Math.max(0, costs.precoVenda + delta * (1-discountRate));
+  pedido.descontoValor = Math.max(0, costs.descontoValor + delta * discountRate);
+  pedido.lucroValor = pedido.precoVenda - pedido.custoFinal - (pedido.bufferFalhas||0);
+  if(pedido.costSnapshot){
+    pedido.costSnapshot.envio = {...envio};
+    pedido.costSnapshot.custoEnvio = envio.total;
+    pedido.costSnapshot.custoFinal = pedido.custoFinal;
+    pedido.costSnapshot.custoTotal = pedido.custoFinal;
+    pedido.costSnapshot.precoVenda = pedido.precoVenda;
+    pedido.costSnapshot.precoFinal = pedido.precoVenda;
+    pedido.costSnapshot.descontoValor = pedido.descontoValor;
+    pedido.costSnapshot.lucroValor = pedido.lucroValor;
+    pedido.costSnapshot.lucro = pedido.lucroValor;
+  }
+  if(window.AutoSave) window.AutoSave.schedule();
+  await savePedidos();
+  toast('Envio guardado no pedido');
 }
 
 /* ---------------------------------------------------------------
@@ -1247,6 +1573,10 @@ function getPedidoCustosTooltip(p){
   return [
     `Filamento: ${custoFilamento!=null ? fmtEUR(custoFilamento) : 'n/d'}`,
     `Eletricidade: ${eletricidade!=null ? fmtEUR(eletricidade) : 'n/d'}`,
+    `Desgaste da máquina: ${fmtEUR(costs.custoMaquina)}`,
+    `Mão de obra: ${fmtEUR(costs.custoMaoObra)}`,
+    `Pós-processamento: ${fmtEUR(costs.custoPosProcessamento)}`,
+    `Envio: ${fmtEUR(costs.custoEnvio)}`,
     `Falhas: ${falhas!=null ? fmtEUR(falhas) : 'n/d'}`,
     `Addons: ${addons!=null ? fmtEUR(addons) : 'n/d'}`,
     ...addOnDetails.map(addOn=>`  ${addOn.nome}: ${fmtEUR(addOn.valor)}`),
@@ -1275,7 +1605,7 @@ function pedidosFiltrados(){
   const showTrash = state.hist.status === 'lixo';
   let list = state.pedidos.filter(p=>showTrash ? p.deleted === true : p.deleted !== true);
   const s = state.hist.search.trim().toLowerCase();
-  if(s) list = list.filter(p => (p.projeto||'').toLowerCase().includes(s) || getPedidoCliente(p).toLowerCase().includes(s) || (p.materiais||[]).some(m=>(m.marca||'').toLowerCase().includes(s) || (m.tipo||'').toLowerCase().includes(s) || (m.cor||'').toLowerCase().includes(s)));
+  if(s) list = list.filter(p => (p.projeto||'').toLowerCase().includes(s) || getPedidoCliente(p).toLowerCase().includes(s) || (p.contacto||'').toLowerCase().includes(s) || (p.materiais||[]).some(m=>(m.marca||'').toLowerCase().includes(s) || (m.tipo||'').toLowerCase().includes(s) || (m.cor||'').toLowerCase().includes(s)));
   if(!showTrash && state.hist.status!=='todos') list = list.filter(p=>getPedidoStatusView(p).id===state.hist.status);
   const sort = state.hist.sort;
   list.sort((a,b)=>{
@@ -1314,7 +1644,7 @@ function renderHist(){
         <h1>Histórico de impressões</h1>
         <p>${all.length} registo${all.length===1?'':'s'} no total · ${pedidosAbertos} em aberto</p>
       </div>
-      <button class="btn btn-ghost btn-sm" onclick="exportCSV()">${ICONS.download} Exportar CSV</button>
+      <button class="btn btn-ghost btn-sm" onclick="exportCSV()">${ICONS.download} Exportar CSV (Excel)</button>
     </div>
 
     <div class="stat-cards">
@@ -1333,6 +1663,7 @@ function renderHist(){
         <option value="orcamento" ${state.hist.status==='orcamento'?'selected':''}>Orçamento</option>
         <option value="vendido" ${state.hist.status==='vendido'?'selected':''}>Vendidos</option>
         <option value="pago" ${state.hist.status==='pago'?'selected':''}>Pagos</option>
+        <option value="entregue" ${state.hist.status==='entregue'?'selected':''}>Entregues</option>
         <option value="lixo" ${state.hist.status==='lixo'?'selected':''}>Lixo</option>
       </select>
       <select onchange="state.hist.sort=this.value; renderHistTable();">
@@ -1377,9 +1708,9 @@ function renderHistTable(){
         return `<article class="history-row">
           <div class="history-name">
             <strong>${escapeHtml(p.projeto || 'Pedido sem nome')}</strong>
-            <span>${data}</span>
+            <span>${cliente ? `${escapeHtml(cliente)} · ` : ''}${data}${p.prazo ? ` · entrega ${fmtDate(p.prazo)}` : ''}</span>
           </div>
-          <div class="history-cell"><span class="history-label">Estado</span><span class="badge ${status.cls}">${status.label}</span></div>
+          <div class="history-cell"><span class="history-label">Estado</span><span class="badge ${status.cls}">${status.label}</span>${hasProductionTracking(p)?`<span class="badge ${getProductionStatusView(p).cls}" style="margin-top:4px;">${getProductionStatusView(p).label}</span>`:''}</div>
           <div class="history-cell mono" title="${escapeAttr(materiaisTooltip)}"><span class="history-label">Gramas</span><b>${fmtNum(getPedidoGramasTotal(p))} g</b></div>
           <div class="history-cell mono"><span class="history-label">Tempo</span><b>${fmtTempoHoras(p.horas)}</b></div>
           <div class="history-cell mono" title="${escapeAttr(custosTooltip)}"><span class="history-label">Custo</span><b>${fmtEUR(costs.custoFinal)}</b></div>
@@ -1404,16 +1735,17 @@ function renderHistTable(){
 }
 
 function exportCSV(){
-  const headers = ['Projeto','Materiais','GramasTotal','Horas','Addons','AddonsDetalhe','CustoFilamento','CustoEletricidade','CustoFinal','PrecoVendaSugerido','Recebido','Lucro','Estado','Data'];
+  const headers = ['Projeto','Cliente','Contacto','Prazo','EstadoComercial','EstadoProducao','Materiais','GramasTotal','HorasImpressao','HorasMaoObra','Addons','AddonsDetalhe','CustoFilamento','CustoEletricidade','CustoMaquina','CustoMaoObra','PosProcessamento','CustoEnvio','Desconto','CustoFinal','PrecoVendaSugerido','Recebido','Lucro','Data'];
   const rows = state.pedidos.filter(p=>p.deleted !== true).map(p=>{
     const costs = getPedidoCostValues(p);
     return [
       p.projeto,
+      getPedidoCliente(p),p.contacto||'',p.prazo||'',getPedidoStatusView(p).label,hasProductionTracking(p)?getProductionStatusView(p).label:'',
       (p.materiais||[]).map(m=>`${m.marca} ${m.tipo||''} ${m.cor} (${m.gramas}g)`.replace(/\s+/g,' ').trim()).join(' + '),
       (p.materiais||[]).reduce((s,m)=>s+(m.gramas||0),0),
-      p.horas,p.costSnapshot?.addons ?? p.addons ?? 0,getPedidoAddOns(p).map(addOn=>`${addOn.nome}: ${addOn.valor.toFixed(2)} EUR`).join(' + '),
-      costs.custoFilamento.toFixed(4),costs.custoEletricidade.toFixed(4),costs.custoFinal.toFixed(4),costs.precoVenda.toFixed(4),
-      p.recebido!==null?p.recebido:'', p.recebido!==null?(p.recebido-costs.custoFinal).toFixed(4):'', p.status, p.data||''
+      p.horas,p.costSnapshot?.maoObraHoras ?? p.maoObraHoras ?? 0,p.costSnapshot?.addons ?? p.addons ?? 0,getPedidoAddOns(p).map(addOn=>`${addOn.nome}: ${addOn.valor.toFixed(2)} EUR`).join(' + '),
+      costs.custoFilamento.toFixed(4),costs.custoEletricidade.toFixed(4),costs.custoMaquina.toFixed(4),costs.custoMaoObra.toFixed(4),costs.custoPosProcessamento.toFixed(4),costs.custoEnvio.toFixed(4),costs.descontoValor.toFixed(4),costs.custoFinal.toFixed(4),costs.precoVenda.toFixed(4),
+      p.recebido!==null?p.recebido:'', p.recebido!==null?(p.recebido-costs.custoFinal).toFixed(4):'', p.data||''
     ];
   });
   const csv = [headers.join(';'), ...rows.map(r=>r.map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(';'))].join('\n');
@@ -1437,9 +1769,15 @@ function openEditPedidoModal(id){
   if(!p) return;
   state.modal = {type:'editPedido', id, form:{
     projeto:p.projeto,
+    cliente:getPedidoCliente(p), contacto:p.contacto||'', prazo:p.prazo||'',
     materiais: (p.materiais||[]).map(m=>({id:uid(), filKey:savedMaterialFilamentKey(m), gramas:m.gramas})),
     horas:p.horas, addons:p.costSnapshot?.addons ?? p.addons, addOns:normalizeAddOns(p.addOns || p.costSnapshot?.addOns, p.costSnapshot?.addons ?? p.addons),
-    recebido: p.recebido, status:p.status, data: p.data||''
+    maoObraHoras:p.costSnapshot?.maoObraHoras ?? p.maoObraHoras ?? '',
+    posProcessamento:p.costSnapshot?.posProcessamento ?? p.posProcessamento ?? '',
+    descontoPct:p.costSnapshot?.descontoPct ?? p.descontoPct ?? '',
+    custoEnvio:p.costSnapshot?.custoEnvio ?? p.custoEnvio ?? 0,
+    envio:p.envio || p.costSnapshot?.envio || null,
+    recebido: p.recebido, status:p.status, producaoStatus:hasProductionTracking(p)?getProductionStatusView(p).id:'', data: p.data||''
   }};
   render();
 }
@@ -1512,6 +1850,10 @@ async function doDuplicatePedido(){
     materiais:materiaisSnapshot,
     horas:p.horas,
     addons,
+    maoObraHoras:p.costSnapshot?.maoObraHoras ?? p.maoObraHoras,
+    posProcessamento:p.costSnapshot?.posProcessamento ?? p.posProcessamento,
+    descontoPct:p.costSnapshot?.descontoPct ?? p.descontoPct,
+    custoEnvio:p.costSnapshot?.custoEnvio ?? p.custoEnvio,
     taxaFalhas:p.taxaFalhas,
     margemLucro:p.margemLucro
   });
@@ -1520,7 +1862,8 @@ async function doDuplicatePedido(){
     projeto: m.nome.trim(),
     materiais: materiaisSnapshot,
     addons, addOns:addOns.map(addOn=>({...addOn})),
-    recebido: null, status:'orcamento', data: todayISO(),
+    cliente:'', contacto:'', prazo:null,
+    recebido: null, status:'orcamento', producaoStatus:'por_planear', data: todayISO(),
     costSnapshot:null
   };
   delete novo.costSnapshot;
@@ -1530,6 +1873,11 @@ async function doDuplicatePedido(){
     horas:novo.horas,
     addons:novo.addons,
     addOns:novo.addOns,
+    maoObraHoras:novo.costSnapshot?.maoObraHoras ?? novo.maoObraHoras,
+    posProcessamento:novo.costSnapshot?.posProcessamento ?? novo.posProcessamento,
+    descontoPct:novo.costSnapshot?.descontoPct ?? novo.descontoPct,
+    custoEnvio:novo.costSnapshot?.custoEnvio ?? novo.custoEnvio,
+    envio:novo.envio,
     taxaFalhas:novo.taxaFalhas,
     margemLucro:novo.margemLucro,
     breakdown:b
@@ -1572,22 +1920,36 @@ async function saveEditPedido(){
     if(resolved.length===0){ toast('Escolhe pelo menos um filamento e indica as gramas'); return; }
   }
   p.projeto = f.projeto.trim();
+  p.cliente = String(f.cliente||'').trim();
+  p.contacto = String(f.contacto||'').trim();
+  p.prazo = f.prazo || null;
   p.data = f.data || null;
   p.status = f.status;
+  p.producaoStatus = f.producaoStatus || null;
   p.recebido = (f.recebido===''||f.recebido===null) ? null : parseFloat(f.recebido);
   if(p.status==='orcamento') p.recebido = null;
   p.addOns = addOns;
   p.addons = addons;
+  p.maoObraHoras = parseFloat(f.maoObraHoras)||0;
+  p.posProcessamento = parseFloat(f.posProcessamento)||0;
+  p.descontoPct = parseFloat(f.descontoPct)||0;
+  p.custoEnvio = parseFloat(f.custoEnvio)||0;
+  p.envio = f.envio ? {...f.envio} : null;
   if(shouldRecalculate){
     p.materiais = resolved.map(buildPedidoMaterialSnapshot);
     p.horas = parseFloat(f.horas)||0;
-    const b = calcBreakdown({materiais:p.materiais,horas:p.horas,addons:p.addons,taxaFalhas:p.taxaFalhas,margemLucro:p.margemLucro});
+    const b = calcBreakdown({materiais:p.materiais,horas:p.horas,addons:p.addons,maoObraHoras:p.maoObraHoras,posProcessamento:p.posProcessamento,descontoPct:p.descontoPct,custoEnvio:p.custoEnvio,taxaFalhas:p.taxaFalhas,margemLucro:p.margemLucro});
     applyPedidoBreakdown(p, b);
     p.costSnapshot = buildCostSnapshot({
       materiais:p.materiais,
       horas:p.horas,
       addons:p.addons,
       addOns:p.addOns,
+      maoObraHoras:p.maoObraHoras,
+      posProcessamento:p.posProcessamento,
+      descontoPct:p.descontoPct,
+      custoEnvio:p.custoEnvio,
+      envio:p.envio,
       taxaFalhas:p.taxaFalhas,
       margemLucro:p.margemLucro,
       breakdown:b
@@ -1925,11 +2287,21 @@ function renderCfg(){
       <div class="row2">
         <div class="field">
           <label>Consumo médio da impressora</label>
-          <div class="unit-input"><input type="number" step="any" min="0" value="${c.consumoMedio}" oninput="(state.config?.consumoMedio ?? DEFAULT_CONFIG.consumoMedio)=parseFloat(this.value)||0; saveConfigDebounced();"><span>kWh/h</span></div>
+          <div class="unit-input"><input type="number" step="any" min="0" value="${c.consumoMedio}" oninput="state.config.consumoMedio=parseFloat(this.value)||0; saveConfigDebounced();"><span>kWh/h</span></div>
         </div>
         <div class="field">
           <label>Custo da eletricidade</label>
-          <div class="unit-input"><input type="number" step="any" min="0" value="${c.custoEletricidade}" oninput="(state.config?.custoEletricidade ?? DEFAULT_CONFIG.custoEletricidade)=parseFloat(this.value)||0; saveConfigDebounced();"><span>€/kWh</span></div>
+          <div class="unit-input"><input type="number" step="any" min="0" value="${c.custoEletricidade}" oninput="state.config.custoEletricidade=parseFloat(this.value)||0; saveConfigDebounced();"><span>€/kWh</span></div>
+        </div>
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label>Desgaste da máquina</label>
+          <div class="unit-input"><input type="number" step="any" min="0" value="${c.custoMaquinaHora}" oninput="state.config.custoMaquinaHora=parseFloat(this.value)||0;saveConfigDebounced()"><span>€/h</span></div>
+        </div>
+        <div class="field">
+          <label>Valor da mão de obra</label>
+          <div class="unit-input"><input type="number" step="any" min="0" value="${c.custoMaoObraHora}" oninput="state.config.custoMaoObraHora=parseFloat(this.value)||0;saveConfigDebounced()"><span>€/h</span></div>
         </div>
       </div>
     </div>
@@ -2003,7 +2375,7 @@ function importBackup(file){
       if(!data || typeof data!=='object' || !('filamentos' in data) || !('pedidos' in data)){
         toast('Ficheiro inválido'); return;
       }
-      state.config = data.config || {...DEFAULT_CONFIG};
+      state.config = {...DEFAULT_CONFIG, ...(data.config || {})};
       state.filamentos = data.filamentos || [];
       state.pedidos = data.pedidos || [];
       if (window.AutoSave) window.AutoSave.schedule();
@@ -2180,6 +2552,11 @@ function renderModal(){
     const pedido = state.pedidos.find(p=>p.id===m.id);
     return modalWrap('Editar registo', `
       <div class="field"><label>Projeto</label><input type="text" value="${escapeHtml(f.projeto)}" oninput="state.modal.form.projeto=this.value"></div>
+      <div class="row2">
+        <div class="field"><label>Cliente</label><input type="text" value="${escapeHtml(f.cliente)}" oninput="state.modal.form.cliente=this.value"></div>
+        <div class="field"><label>Contacto</label><input type="text" value="${escapeHtml(f.contacto)}" oninput="state.modal.form.contacto=this.value"></div>
+      </div>
+      <div class="field"><label>Prazo de entrega</label><input type="date" value="${escapeHtml(f.prazo)}" oninput="state.modal.form.prazo=this.value"></div>
       <div class="field">
         <label>Filamentos</label>
         ${f.materiais.map(m=>materialRowHtml(m,'modal',f.materiais.length>1)).join('')}
@@ -2190,19 +2567,38 @@ function renderModal(){
         <div class="field"><label>Tempo (total)</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.horas}" oninput="state.modal.form.horas=this.value"><span>h</span></div></div>
         <div class="field"><label>Data</label><input type="date" value="${f.data}" oninput="state.modal.form.data=this.value"></div>
       </div>
+      <div class="row2">
+        <div class="field"><label>Tempo de mão de obra</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.maoObraHoras}" oninput="state.modal.form.maoObraHoras=this.value"><span>h</span></div></div>
+        <div class="field"><label>Pós-processamento</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.posProcessamento}" oninput="state.modal.form.posProcessamento=this.value"><span>€</span></div></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>Envio</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.custoEnvio}" oninput="state.modal.form.custoEnvio=this.value;state.modal.form.envio=null"><span>€</span></div></div>
+        <div class="field"><label>Desconto</label><div class="unit-input"><input type="number" step="any" min="0" max="100" value="${f.descontoPct}" oninput="state.modal.form.descontoPct=this.value"><span>%</span></div></div>
+      </div>
       <div class="field">
         <label>Add-ons</label>
         ${f.addOns.map(addOn=>addOnRowHtml(addOn,'modal',f.addOns.length>1)).join('')}
         <button type="button" class="btn btn-ghost btn-sm" onclick="modalAddAddOn()">${ICONS.plus} Adicionar add-on</button>
       </div>
       <div class="row2">
-        <div class="field"><label>Estado</label>
-          <select onchange="state.modal.form.status=this.value">
+        <div class="field"><label>Estado comercial</label>
+          <select onchange="state.modal.form.status=this.value;render()">
             <option value="orcamento" ${f.status==='orcamento'?'selected':''}>Orçamento</option>
             <option value="vendido" ${f.status==='vendido'?'selected':''}>Vendido</option>
+            <option value="pago" ${f.status==='pago'?'selected':''}>Pago</option>
+            <option value="entregue" ${f.status==='entregue'?'selected':''}>Entregue</option>
           </select>
         </div>
         <div class="field"><label>Recebido</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.recebido===null?'':f.recebido}" oninput="state.modal.form.recebido=this.value" ${f.status==='orcamento'?'disabled':''}><span>€</span></div></div>
+      </div>
+      <div class="field"><label>Estado de produção</label>
+        <select onchange="state.modal.form.producaoStatus=this.value">
+          <option value="" ${!f.producaoStatus?'selected':''}>Sem acompanhamento</option>
+          <option value="por_planear" ${f.producaoStatus==='por_planear'?'selected':''}>Por planear</option>
+          <option value="em_fila" ${f.producaoStatus==='em_fila'?'selected':''}>Em fila</option>
+          <option value="a_imprimir" ${f.producaoStatus==='a_imprimir'?'selected':''}>A imprimir</option>
+          <option value="pronto" ${f.producaoStatus==='pronto'?'selected':''}>Pronto</option>
+        </select>
       </div>
     `, [
       {label:'Cancelar', cls:'btn-ghost', action:'closeModal()'},
@@ -2373,7 +2769,9 @@ function render(){
   migrateFilamentosToLotes();
   renderSidebar();
   const page = document.getElementById('pageContent');
-  if(state.view==='calc') page.innerHTML = renderCalc();
+  if(state.view==='dash') page.innerHTML = renderDashboard();
+  else if(state.view==='calc') page.innerHTML = renderCalc();
+  else if(state.view==='prod') page.innerHTML = renderProduction();
   else if(state.view==='hist') page.innerHTML = renderHist();
   else if(state.view==='fil') page.innerHTML = renderFil();
   else if(state.view==='ship') page.innerHTML = renderShipping();
