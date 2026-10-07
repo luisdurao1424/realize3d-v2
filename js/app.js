@@ -2423,7 +2423,7 @@ function render(){
   const autosave = await import(new URL('services/autosave.js', appSrc).href);
   const ready = await loadAll();
   migrateFilamentosToLotes();
-  autosave.AutoSave.init({
+  const initAutoSave = () => autosave.AutoSave.init({
     save: async () => {
       if(!await pushPayload()) throw new Error('workspace-save-failed');
     },
@@ -2431,8 +2431,10 @@ function render(){
   });
   document.getElementById('loadingScreen').style.display = 'none';
   if(!ready){
+    initAutoSave();
     showSetupScreen();
     return;
   }
   enterApp();
+  initAutoSave();
 })();
