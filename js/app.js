@@ -365,8 +365,10 @@ function migrateFilamentosToLotes(filamentos = state.filamentos){
   });
   if(filamentos === state.filamentos){
     state.filamentos = migrated;
-    syncStoreState();
-    if(created && window.AutoSave) window.AutoSave.schedule();
+    if(created){
+      syncStoreState();
+      if(window.AutoSave) window.AutoSave.schedule();
+    }
   }
   console.log('Lotes: migração concluída');
   return migrated;
