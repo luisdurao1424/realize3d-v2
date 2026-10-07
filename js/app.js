@@ -2421,15 +2421,14 @@ function render(){
   const store = await import(new URL('core/store.js', appSrc).href);
   syncStoreState();
   const autosave = await import(new URL('services/autosave.js', appSrc).href);
+  const ready = await loadAll();
+  migrateFilamentosToLotes();
   autosave.AutoSave.init({
     save: async () => {
       if(!await pushPayload()) throw new Error('workspace-save-failed');
     },
     hasWorkspace: () => Boolean(workspaceCode),
   });
-
-  const ready = await loadAll();
-  migrateFilamentosToLotes();
   document.getElementById('loadingScreen').style.display = 'none';
   if(!ready){
     showSetupScreen();

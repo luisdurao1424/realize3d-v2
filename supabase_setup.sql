@@ -110,6 +110,8 @@ revoke all on function public.get_workspace(text) from public, anon, authenticat
 revoke all on function public.create_workspace(text, jsonb) from public, anon, authenticated;
 revoke all on function public.save_workspace(text, jsonb, timestamptz) from public, anon, authenticated;
 
-grant execute on function public.get_workspace(text) to anon, authenticated;
-grant execute on function public.create_workspace(text, jsonb) to anon, authenticated;
-grant execute on function public.save_workspace(text, jsonb, timestamptz) to anon, authenticated;
+-- A app atual nao usa Supabase Auth. Estes endpoints anonimos sao a sua API
+-- publica deliberada; cada operacao exige um codigo de workspace valido.
+grant execute on function public.get_workspace(text) to anon;
+grant execute on function public.create_workspace(text, jsonb) to anon;
+grant execute on function public.save_workspace(text, jsonb, timestamptz) to anon;
