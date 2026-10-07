@@ -44,17 +44,17 @@ const SEED_FILAMENTOS = [
 // imported from the user's original spreadsheet (Produtos sheet) - historical jobs
 const SEED_PEDIDOS_RAW = [
   ['Hogwarts globo','Elegoo','Branco',300,11.5,3.2,15.0,'vendido'],
-  ['Jarras Ana Luisa','Giantarm','Wood',172,5.0,0,22.0,'vendido'],
-  ['Jarras Ana Luisa','Elegoo','Branco',400,10.0,0,null,'orcamento'],
-  ['Presépio Sónia','Elegoo','Branco',97,6.0,0,5.0,'vendido'],
-  ['Presépio Diana','Elegoo','Branco',97,6.0,0,5.0,'vendido'],
-  ['Jarras Joana','Esun','Branco frio',55,3.2,0,15.0,'vendido'],
-  ['Jarras Joana','Giantarm','Wood',195,7.4,0,null,'orcamento'],
-  ['Jarras Ana Luisa','Giantarm','Wood',55,3.2,0,15.0,'vendido'],
-  ['Jarras Ana Luisa','Esun','Branco frio',195,7.4,0,null,'orcamento'],
+  ['Jarras decorativas','Giantarm','Wood',172,5.0,0,22.0,'vendido'],
+  ['Jarras decorativas','Elegoo','Branco',400,10.0,0,null,'orcamento'],
+  ['Presépio personalizado','Elegoo','Branco',97,6.0,0,5.0,'vendido'],
+  ['Presépio personalizado','Elegoo','Branco',97,6.0,0,5.0,'vendido'],
+  ['Jarras pequenas','Esun','Branco frio',55,3.2,0,15.0,'vendido'],
+  ['Jarras pequenas','Giantarm','Wood',195,7.4,0,null,'orcamento'],
+  ['Jarras decorativas','Giantarm','Wood',55,3.2,0,15.0,'vendido'],
+  ['Jarras decorativas','Esun','Branco frio',195,7.4,0,null,'orcamento'],
   ['Porta retratos','Elegoo','Madeira',5,2.0,0,6.0,'vendido'],
   ['Porta retratos','Elegoo','Rosa',55,4.26,0,null,'orcamento'],
-  ['Jarra Ana Luisa','Esun','Branco frio',20,6.1,0,3.5,'vendido'],
+  ['Jarra decorativa','Esun','Branco frio',20,6.1,0,3.5,'vendido'],
   ['Sofá Friends','Elegoo','Branco',25,1.0,0,16.0,'vendido'],
   ['Sofá Friends','Amazon','Dourado',63,3.0,0,null,'orcamento'],
   ['Sofá Friends','Elegoo','Laranja',271,10.49,0,null,'orcamento'],
@@ -66,7 +66,7 @@ const SEED_PEDIDOS_RAW = [
   ['Sofá Friends','Elegoo','Laranja',229,8.0,0,null,'orcamento'],
   ['Suporte Harry','Elegoo','Laranja',180,1.5,0,null,'orcamento'],
   ['Comando XBOX','Elegoo','Laranja',220,12.0,0,null,'orcamento'],
-  ['CakeTop Lucas','Elegoo','Castanho',13,2.2,0,null,'orcamento'],
+  ['Cake topper','Elegoo','Castanho',13,2.2,0,null,'orcamento'],
   ['Lembranças','Amazon','Dourado',2.56,0.3,0,null,'orcamento'],
   ['Lembranças','Elegoo','Branco',5.04,1.0,0,null,'orcamento'],
   ['Lembranças','Elegoo','Branco',0.98,0.2,0,null,'orcamento'],
@@ -115,7 +115,6 @@ function savedMaterialFilamentKey(material){
 --------------------------------------------------------------- */
 const SUPABASE_URL = 'https://dkqzhgckekrfuyrgmaxd.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_xQml96WeT3jczwV_F0YTSQ_YjTqNPzB';
-const TABLE_NAME = 'realize3d_workspaces';
 
 let sb = null;
 try{
@@ -131,6 +130,7 @@ try{
 const STORAGE_PREFIX = 'realize3d_';
 const LAST_WORKSPACE_KEY = 'realize3d_last_workspace';
 let workspaceCode = null;
+let workspaceUpdatedAt = null;
 
 function lsGet(key){
   try{ return localStorage.getItem(STORAGE_PREFIX+key); }
@@ -164,7 +164,7 @@ function workspaceDirectLink(code = workspaceCode){
 }
 
 function setSyncStatus(status){
-  syncStatus = status; // 'ok' | 'offline' | 'syncing'
+  syncStatus = status; // 'ok' | 'offline' | 'syncing' | 'conflict'
   const el = document.getElementById('syncBadge');
   if(el) el.outerHTML = syncBadgeHtml();
 }
@@ -173,7 +173,8 @@ function syncBadgeHtml(){
   const map = {
     ok:{cls:'ok', label:'Sincronizado'},
     offline:{cls:'offline', label:'Sem ligação — cópia local'},
-    syncing:{cls:'syncing', label:'A sincronizar…'}
+    syncing:{cls:'syncing', label:'A sincronizar…'},
+    conflict:{cls:'offline', label:'Conflito — atualiza a página'}
   };
   const s = map[syncStatus] || map.syncing;
   return `<div class="sync-badge" id="syncBadge"><span class="sync-dot ${s.cls}"></span><span>${s.label}</span></div>`;
@@ -191,6 +192,16 @@ function applyPayload(payload){
 }
 function currentPayload(){
   return { config: state.config, filamentos: state.filamentos, pedidos: state.pedidos };
+}
+
+function firstRpcRow(data){
+  return Array.isArray(data) ? (data[0] || null) : (data || null);
+}
+
+async function getWorkspace(code){
+  const {data, error} = await sb.rpc('get_workspace', {p_code: code});
+  if(error) throw error;
+  return firstRpcRow(data);
 }
 
 // returns true if the app is ready to show; false if the setup screen should be shown instead
@@ -217,11 +228,11 @@ async function loadAll(){
     return true;
   }
   try{
-    const {data, error} = await sb.from(TABLE_NAME).select('payload').eq('id', workspaceCode).maybeSingle();
-    if(error) throw error;
-    if(!data){ throw new Error('workspace-not-found'); }
-    applyPayload(data.payload || {});
-    lsSet('cache_payload', JSON.stringify(data.payload || {}));
+    const workspace = await getWorkspace(workspaceCode);
+    if(!workspace){ throw new Error('workspace-not-found'); }
+    workspaceUpdatedAt = workspace.updated_at;
+    applyPayload(workspace.payload || {});
+    lsSet('cache_payload', JSON.stringify(workspace.payload || {}));
     setSyncStatus('ok');
     lsSet('workspace', workspaceCode);
     setLastWorkspace(workspaceCode);
@@ -233,6 +244,7 @@ async function loadAll(){
     if(urlWorkspace){
       console.log('Workspace: abertura por URL falhou');
       workspaceCode = null;
+      workspaceUpdatedAt = null;
       return false;
     }
     const cached = lsGet('cache_payload');
@@ -245,15 +257,32 @@ async function loadAll(){
 async function pushPayload(){
   const payload = currentPayload();
   lsSet('cache_payload', JSON.stringify(payload));
-  if(!workspaceCode || !sb){ setSyncStatus('offline'); return; }
+  if(!workspaceCode || !sb || !workspaceUpdatedAt){ setSyncStatus('offline'); return false; }
   setSyncStatus('syncing');
   try{
-    const {error} = await sb.from(TABLE_NAME).update({payload, updated_at:new Date().toISOString()}).eq('id', workspaceCode);
+    const {data, error} = await sb.rpc('save_workspace', {
+      p_code: workspaceCode,
+      p_payload: payload,
+      p_expected_updated_at: workspaceUpdatedAt
+    });
     if(error) throw error;
+    const result = firstRpcRow(data);
+    if(!result || result.status !== 'saved'){
+      if(result?.status === 'conflict'){
+        setSyncStatus('conflict');
+        toast('Este espaço foi alterado noutro dispositivo. Atualiza a página antes de continuar.');
+      }else{
+        setSyncStatus('offline');
+      }
+      return false;
+    }
+    workspaceUpdatedAt = result.updated_at;
     setSyncStatus('ok');
+    return true;
   }catch(e){
     console.error(e);
     setSyncStatus('offline');
+    return false;
   }
 }
 async function saveConfig(){ await pushPayload(); }
@@ -2252,15 +2281,22 @@ function genWorkspaceCode(){
 async function setupCreateWorkspace(){
   if(!sb){ setupUi.error='Supabase não está configurado neste ficheiro (faltam URL/chave). Vê as instruções que te dei.'; renderSetupBody(); return; }
   setupUi.loading = true; setupUi.error=''; renderSetupBody();
-  const code = genWorkspaceCode();
   const payload = defaultPayload();
   try{
-    const {error} = await sb.from(TABLE_NAME).insert({id:code, payload});
-    if(error) throw error;
+    let code = null;
+    let created = null;
+    for(let attempt=0; attempt<5 && !created?.created; attempt++){
+      code = genWorkspaceCode();
+      const {data, error} = await sb.rpc('create_workspace', {p_code:code, p_payload:payload});
+      if(error) throw error;
+      created = firstRpcRow(data);
+    }
+    if(!created?.created) throw new Error('workspace-code-collision');
     lsSet('workspace', code);
     setLastWorkspace(code);
     lsSet('cache_payload', JSON.stringify(payload));
     workspaceCode = code;
+    workspaceUpdatedAt = created.updated_at;
     applyPayload(payload);
     setSyncStatus('ok');
     setupUi.loading=false; setupUi.mode='created'; setupUi.createdCode=code;
@@ -2279,14 +2315,14 @@ async function setupJoinWorkspace(){
   if(!code){ setupUi.error='Indica um código.'; renderSetupBody(); return; }
   setupUi.loading = true; setupUi.error=''; renderSetupBody();
   try{
-    const {data, error} = await sb.from(TABLE_NAME).select('payload').eq('id', code).maybeSingle();
-    if(error) throw error;
-    if(!data){ setupUi.loading=false; setupUi.error='Código não encontrado.'; renderSetupBody(); return; }
+    const workspace = await getWorkspace(code);
+    if(!workspace){ setupUi.loading=false; setupUi.error='Código não encontrado.'; renderSetupBody(); return; }
     lsSet('workspace', code);
     setLastWorkspace(code);
-    lsSet('cache_payload', JSON.stringify(data.payload||{}));
+    lsSet('cache_payload', JSON.stringify(workspace.payload||{}));
     workspaceCode = code;
-    applyPayload(data.payload||{});
+    workspaceUpdatedAt = workspace.updated_at;
+    applyPayload(workspace.payload||{});
     setSyncStatus('ok');
     enterApp();
   }catch(e){
@@ -2386,7 +2422,9 @@ function render(){
   syncStoreState();
   const autosave = await import(new URL('services/autosave.js', appSrc).href);
   autosave.AutoSave.init({
-    save: pushPayload,
+    save: async () => {
+      if(!await pushPayload()) throw new Error('workspace-save-failed');
+    },
     hasWorkspace: () => Boolean(workspaceCode),
   });
 
