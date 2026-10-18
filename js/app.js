@@ -988,13 +988,9 @@ function renderSidebar(){
 }
 
 function getProductionStatusView(p){
-  const map = {
-    por_planear:{id:'por_planear', label:'Por planear', cls:'badge-orc'},
-    em_fila:{id:'em_fila', label:'Em fila', cls:'badge-queue'},
-    a_imprimir:{id:'a_imprimir', label:'A imprimir', cls:'badge-printing'},
-    pronto:{id:'pronto', label:'Pronto', cls:'badge-ready'}
-  };
-  return map[p?.producaoStatus] || map.por_planear;
+  return p?.producaoStatus === 'pronto'
+    ? {id:'pronto', label:'Pronto', cls:'badge-ready'}
+    : {id:'por_planear', label:'Em planeamento/orçamento', cls:'badge-orc'};
 }
 
 function hasProductionTracking(p){
@@ -1003,7 +999,7 @@ function hasProductionTracking(p){
 }
 
 function isPedidoOverdue(p){
-  if(!p?.prazo || p.deleted === true || getPedidoStatusView(p).id === 'entregue') return false;
+  if(!p?.prazo || p.deleted === true || getPedidoStatusView(p).id !== 'orcamento') return false;
   const deadline = new Date(`${p.prazo}T23:59:59`);
   return Number.isFinite(deadline.getTime()) && deadline.getTime() < Date.now();
 }
@@ -1026,10 +1022,7 @@ function getDashboardData(){
   const vendidosMes = pedidos.filter(p=>monthKey(p.data)===currentMonth && p.recebido!==null && p.recebido!==undefined);
   const faturacaoMes = vendidosMes.reduce((sum,p)=>sum+(parseFloat(p.recebido)||0),0);
   const lucroMes = vendidosMes.reduce((sum,p)=>sum+((parseFloat(p.recebido)||0)-getPedidoCostValues(p).custoFinal),0);
-  const emAberto = pedidos.filter(p=>{
-    const status = getPedidoStatusView(p).id;
-    return hasProductionTracking(p);
-  }).length;
+  const emAberto = pedidos.filter(p=>getPedidoStatusView(p).id==='orcamento' && hasProductionTracking(p)).length;
   const porReceber = pedidos.reduce((sum,p)=>{
     const status = getPedidoStatusView(p).id;
     if(status==='orcamento' || status==='entregue') return sum;
@@ -1100,10 +1093,19 @@ function renderDashboard(){
   `;
 }
 
-async function setPedidoProductionStatus(id, status){
+async function markPedidoPrinted(id){
   const pedido = state.pedidos.find(p=>p.id===id);
-  if(!pedido) return;
-  pedido.producaoStatus = status;
+  if(!pedido || pedido.deleted===true || getPedidoStatusView(pedido).id!=='orcamento' || pedido.producaoStatus==='pronto') return;
+  pedido.producaoStatus = 'pronto';
+  if(window.AutoSave) window.AutoSave.schedule();
+  await savePedidos();
+  render();
+}
+
+async function markPedidoSold(id){
+  const pedido = state.pedidos.find(p=>p.id===id);
+  if(!pedido || pedido.deleted===true || getPedidoStatusView(pedido).id!=='orcamento' || pedido.producaoStatus!=='pronto') return;
+  pedido.status = 'vendido';
   if(window.AutoSave) window.AutoSave.schedule();
   await savePedidos();
   render();
@@ -1111,13 +1113,11 @@ async function setPedidoProductionStatus(id, status){
 
 function renderProduction(){
   const pedidos = state.pedidos.filter(p=>{
-    if(p.deleted===true || getPedidoStatusView(p).id==='entregue') return false;
+    if(p.deleted===true || getPedidoStatusView(p).id!=='orcamento') return false;
     return hasProductionTracking(p);
   });
   const columns = [
-    {id:'por_planear',label:'Por planear'},
-    {id:'em_fila',label:'Em fila'},
-    {id:'a_imprimir',label:'A imprimir'},
+    {id:'por_planear',label:'Em planeamento/orçamento'},
     {id:'pronto',label:'Pronto'}
   ];
   return `
@@ -1132,9 +1132,7 @@ function renderProduction(){
               <div class="kanban-title"><strong>${escapeHtml(p.projeto||'Pedido sem nome')}</strong>${p.prazo?`<time>${fmtDate(p.prazo)}</time>`:''}</div>
               <p>${escapeHtml(getPedidoCliente(p)||'Sem cliente')}${p.contacto?` · ${escapeHtml(p.contacto)}`:''}</p>
               <div class="kanban-meta"><span>${fmtTempoHoras(p.horas)}</span><b>${fmtEUR(getPedidoCostValues(p).precoVenda)}</b></div>
-              <select aria-label="Estado de produção" onchange="setPedidoProductionStatus('${p.id}',this.value)">
-                ${columns.map(option=>`<option value="${option.id}" ${option.id===column.id?'selected':''}>${option.label}</option>`).join('')}
-              </select>
+              <label class="kanban-check"><input type="checkbox" onchange="if(this.checked) ${column.id==='pronto'?'markPedidoSold':'markPedidoPrinted'}('${p.id}')"><span>${column.id==='pronto'?'Vendido':'Impressos'}</span></label>
               <button class="btn btn-ghost btn-sm" onclick="openEditPedidoModal('${p.id}')">${ICONS.edit} Editar</button>
             </article>`).join('') : `<div class="kanban-empty">Sem pedidos</div>`}
           </div>
@@ -2937,10 +2935,7 @@ function renderModal(){
       </div>
       <div class="field"><label>Estado de produção</label>
         <select onchange="state.modal.form.producaoStatus=this.value">
-          <option value="" ${!f.producaoStatus?'selected':''}>Sem acompanhamento</option>
-          <option value="por_planear" ${f.producaoStatus==='por_planear'?'selected':''}>Por planear</option>
-          <option value="em_fila" ${f.producaoStatus==='em_fila'?'selected':''}>Em fila</option>
-          <option value="a_imprimir" ${f.producaoStatus==='a_imprimir'?'selected':''}>A imprimir</option>
+          <option value="por_planear" ${f.producaoStatus==='por_planear'?'selected':''}>Em planeamento/orçamento</option>
           <option value="pronto" ${f.producaoStatus==='pronto'?'selected':''}>Pronto</option>
         </select>
       </div>
