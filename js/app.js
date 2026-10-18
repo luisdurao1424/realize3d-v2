@@ -1201,7 +1201,10 @@ function filamentOptions(selectedKey){
     const tipo = f.tipo || f.material || 'Tipo n/d';
     const data = getFilamentPurchaseDate(f);
     const archived = f.arquivado ? ' · Arquivada' : '';
-    return `<option value="${escapeHtml(k)}" ${k===selectedKey?'selected':''}>${escapeHtml(f.marca)} — ${escapeHtml(tipo)} — ${escapeHtml(f.cor)} · ${fmtEUR(pk)}/kg${data ? ` · ${fmtDate(data)}` : ''}${archived}</option>`;
+    return `<button type="button" class="material-picker-option" data-fil-key="${escapeAttr(k)}" onclick="selectMaterialFilament(this)">
+      <span class="material-option-swatch" style="background:${filamentSwatch(f)}"></span>
+      <span class="material-option-copy"><strong>${escapeHtml(f.marca)} — ${escapeHtml(tipo)} — ${escapeHtml(f.cor)}</strong><small>${fmtEUR(pk)}/kg${data ? ` · ${fmtDate(data)}` : ''}${archived}</small></span>
+    </button>`;
   }).join('');
 }
 
@@ -1322,16 +1325,23 @@ function materialRowHtml(m, ctx, canRemove){
   const updateFn = ctx==='calc' ? 'calcUpdateMaterial' : 'modalUpdateMaterial';
   const removeFn = ctx==='calc' ? 'calcRemoveMaterial' : 'modalRemoveMaterial';
   const fil = findFilamentByKey(m.filKey);
-  const lote = fil ? getLoteAtivoCalculo(fil) : null;
-  const preco = fil ? getPrecoKg(fil) : 0;
   return `<div class="material-row">
     <div class="material-row-main">
       <div style="flex:2;min-width:180px;">
-        <select onchange="${updateFn}('${m.id}','filKey',this.value)">
-          <option value="">— escolher filamento —</option>
-          ${filamentOptions(m.filKey)}
-        </select>
-        ${fil ? `<div class="material-meta">Bobina${getFilamentPurchaseDate(fil) ? ` de ${fmtDate(getFilamentPurchaseDate(fil))}` : ''}${getFilamentSupplier(fil) ? ` · ${escapeHtml(getFilamentSupplier(fil))}` : ''} · ${fmtEUR(preco)}/kg</div>` : ''}
+        <div class="material-picker" data-context="${ctx}" data-material-id="${escapeAttr(m.id)}">
+          <button type="button" class="material-picker-trigger" aria-haspopup="true" aria-expanded="false" onclick="toggleMaterialPicker(this)">
+            <span class="material-picker-current">${materialPickerCurrentHtml(fil)}</span>
+          </button>
+          <div class="material-picker-menu" hidden>
+            <input type="search" placeholder="Pesquisar filamento..." aria-label="Pesquisar filamento" oninput="filterMaterialPicker(this)">
+            <div class="material-picker-options" role="group" aria-label="Filamentos">
+              <button type="button" class="material-picker-option" data-fil-key="" onclick="selectMaterialFilament(this)"><span class="material-option-copy"><strong>— escolher filamento —</strong></span></button>
+              ${filamentOptions(m.filKey)}
+            </div>
+            <div class="material-picker-empty" hidden>Sem filamentos encontrados</div>
+          </div>
+        </div>
+        <div class="material-meta" ${fil?'':'hidden'}>${fil ? materialPickerMetaHtml(fil) : ''}</div>
       </div>
       <div style="flex:1;min-width:110px;">
         <div class="unit-input"><input type="number" min="0" step="any" placeholder="0" value="${m.gramas}" oninput="${updateFn}('${m.id}','gramas',this.value)"><span>g</span></div>
@@ -1340,6 +1350,76 @@ function materialRowHtml(m, ctx, canRemove){
     </div>
   </div>`;
 }
+
+function materialPickerCurrentHtml(fil){
+  if(!fil) return '— escolher filamento —';
+  return `<span class="material-option-swatch" style="background:${filamentSwatch(fil)}"></span><span class="material-picker-name">${escapeHtml(fil.marca)} — ${escapeHtml(fil.tipo || fil.material || 'Tipo n/d')} — ${escapeHtml(fil.cor)}</span>`;
+}
+
+function materialPickerMetaHtml(fil){
+  return `Bobina${getFilamentPurchaseDate(fil) ? ` de ${fmtDate(getFilamentPurchaseDate(fil))}` : ''}${getFilamentSupplier(fil) ? ` · ${escapeHtml(getFilamentSupplier(fil))}` : ''} · ${fmtEUR(getPrecoKg(fil))}/kg`;
+}
+
+function closeMaterialPickers(){
+  document.querySelectorAll('.material-picker-menu:not([hidden])').forEach(menu=>{
+    menu.hidden = true;
+    menu.closest('.material-picker').querySelector('.material-picker-trigger').setAttribute('aria-expanded','false');
+  });
+}
+
+function toggleMaterialPicker(trigger){
+  const picker = trigger.closest('.material-picker');
+  const menu = picker.querySelector('.material-picker-menu');
+  const opening = menu.hidden;
+  closeMaterialPickers();
+  if(!opening) return;
+  const boundary = picker.closest('.modal')?.getBoundingClientRect().bottom ?? window.innerHeight;
+  menu.classList.toggle('open-up', boundary - trigger.getBoundingClientRect().bottom < 310);
+  menu.hidden = false;
+  trigger.setAttribute('aria-expanded','true');
+  const search = menu.querySelector('input');
+  search.value = '';
+  filterMaterialPicker(search);
+  search.focus();
+}
+
+function filterMaterialPicker(input){
+  const picker = input.closest('.material-picker');
+  const query = normalizeSearchText(input.value);
+  let visible = 0;
+  picker.querySelectorAll('.material-picker-option').forEach(option=>{
+    option.hidden = Boolean(query) && !normalizeSearchText(option.textContent).includes(query);
+    if(!option.hidden) visible++;
+  });
+  picker.querySelector('.material-picker-empty').hidden = visible>0;
+}
+
+function selectMaterialFilament(option){
+  const picker = option.closest('.material-picker');
+  const {context, materialId} = picker.dataset;
+  const key = option.dataset.filKey;
+  if(context==='calc'){
+    calcUpdateMaterial(materialId,'filKey',key);
+    return;
+  }
+  modalUpdateMaterial(materialId,'filKey',key);
+  const fil = findFilamentByKey(key);
+  picker.querySelector('.material-picker-current').innerHTML = materialPickerCurrentHtml(fil);
+  const meta = picker.parentElement.querySelector('.material-meta');
+  meta.innerHTML = fil ? materialPickerMetaHtml(fil) : '';
+  meta.hidden = !fil;
+  closeMaterialPickers();
+}
+
+document.addEventListener('pointerdown', event=>{
+  if(!event.target.closest('.material-picker')) closeMaterialPickers();
+});
+document.addEventListener('keydown', event=>{
+  if(event.key!=='Escape') return;
+  const picker = document.activeElement?.closest('.material-picker');
+  closeMaterialPickers();
+  picker?.querySelector('.material-picker-trigger').focus();
+});
 
 function calcAddMaterial(){ state.calc.materiais.push({id:uid(), filKey:'', gramas:''}); render(); }
 function calcRemoveMaterial(id){
