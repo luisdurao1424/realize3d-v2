@@ -96,6 +96,7 @@ let state = {
   },
   hist: {search:'', status:'todos', sort:'data_desc'},
   fil: {search:'', material:'todos', status:'ativos', sort:'recentes'},
+  productionPayments: {},
   shipping: {service:'normal', weight:'', cod:false, codAmount:'', receipt:false, electronic:false, own:false, vatRate:0.23, pedidoId:''},
   modal: null, // {type, data}
   sidebarOpen:false,
@@ -203,6 +204,7 @@ function applyPayload(payload){
   state.filamentos = payload.filamentos || SEED_FILAMENTOS;
   migrateFilamentosToLotes();
   state.pedidos = payload.pedidos || [];
+  state.productionPayments = {};
   syncStoreState();
 }
 function currentPayload(){
@@ -1120,7 +1122,16 @@ async function setPedidoCommercialStatus(id, status){
 async function markPedidoSold(id){
   const pedido = state.pedidos.find(p=>p.id===id);
   if(!pedido || pedido.deleted===true || !isPedidoOpen(pedido) || pedido.producaoStatus!=='pronto') return;
+  const valor = String(state.productionPayments[id] ?? pedido.recebido ?? '').trim();
+  const recebido = valor ? Number(valor.replace(',','.')) : null;
+  if(valor && (!/^\d+(?:[.,]\d{1,2})?$/.test(valor) || !Number.isFinite(recebido))){
+    toast('Indica um valor pago válido');
+    render();
+    return;
+  }
+  pedido.recebido = recebido;
   pedido.status = 'vendido';
+  delete state.productionPayments[id];
   if(window.AutoSave) window.AutoSave.schedule();
   await savePedidos();
   render();
@@ -1143,22 +1154,33 @@ function renderProduction(){
         return `<section class="kanban-column">
           <header><span>${column.label}</span><b>${items.length}</b></header>
           <div class="kanban-items">
-            ${items.length ? items.map(p=>`<article class="kanban-card ${isPedidoOverdue(p)?'overdue':''}">
+            ${items.length ? items.map(p=>{
+              const costs = getPedidoCostValues(p);
+              return `<article class="kanban-card ${isPedidoOverdue(p)?'overdue':''}">
               <div class="kanban-title"><strong>${escapeHtml(p.projeto||'Pedido sem nome')}</strong>${p.prazo?`<time>${fmtDate(p.prazo)}</time>`:''}</div>
               <p>${escapeHtml(getPedidoCliente(p)||'Sem cliente')}${p.contacto?` · ${escapeHtml(p.contacto)}`:''}</p>
-              <div class="kanban-meta"><span>${fmtTempoHoras(p.horas)}</span><b>${fmtEUR(getPedidoCostValues(p).precoVenda)}</b></div>
+              <div class="kanban-meta">
+                <div><span>Filamento gasto</span><b>${fmtNum(getPedidoGramasTotal(p))} g</b></div>
+                <div><span>Tempo</span><b>${fmtTempoHoras(p.horas)}</b></div>
+                <div><span>Custo total</span><b>${fmtEUR(costs.custoFinal)}</b></div>
+                <div><span>Preço sugerido</span><b>${fmtEUR(costs.precoVenda)}</b></div>
+              </div>
               <label class="kanban-commercial">Estado comercial
                 <select onchange="setPedidoCommercialStatus('${p.id}',this.value)">
                   <option value="orcamento" ${getPedidoStatusView(p).id==='orcamento'?'selected':''}>Orçamento</option>
                   <option value="em_producao" ${getPedidoStatusView(p).id==='em_producao'?'selected':''}>Em produção</option>
                 </select>
               </label>
+              <label class="kanban-payment">Valor pago
+                <span class="unit-input"><input type="text" inputmode="decimal" placeholder="0,00" value="${escapeAttr(state.productionPayments[p.id] ?? p.recebido ?? '')}" oninput="state.productionPayments['${p.id}']=this.value"><span>€</span></span>
+              </label>
               <div class="kanban-checks">
                 <label class="kanban-check"><input type="checkbox" ${column.id==='pronto'?'checked':''} onchange="markPedidoPrinted('${p.id}',this.checked)"><span>Impressos</span></label>
                 <label class="kanban-check" ${column.id==='pronto'?'':'title="Marca Impressos primeiro"'}><input type="checkbox" ${column.id==='pronto'?'':'disabled'} onchange="if(this.checked) markPedidoSold('${p.id}')"><span>Vendido</span></label>
               </div>
               <button class="btn btn-ghost btn-sm" onclick="openEditPedidoModal('${p.id}')">${ICONS.edit} Editar</button>
-            </article>`).join('') : `<div class="kanban-empty">Sem pedidos</div>`}
+            </article>`;
+            }).join('') : `<div class="kanban-empty">Sem pedidos</div>`}
           </div>
         </section>`;
       }).join('')}

@@ -365,10 +365,13 @@
   .kanban-title strong{font-size:13px;line-height:1.35;}
   .kanban-title time{font-family:var(--font-mono);font-size:10px;color:var(--coral);white-space:nowrap;}
   .kanban-card p{margin:5px 0 10px;color:var(--text-faint);font-size:11px;line-height:1.4;}
-  .kanban-meta{display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-top:1px solid var(--border-soft);font-size:11px;color:var(--text-dim);}
-  .kanban-meta b{font-family:var(--font-mono);color:var(--text);}
-  .kanban-commercial{margin:8px 0 0;font-size:11px;}
+  .kanban-meta{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 16px;padding:10px 0;border-top:1px solid var(--border-soft);font-size:11px;color:var(--text-dim);}
+  .kanban-meta div{display:grid;gap:3px;min-width:0;}
+  .kanban-meta b{font-family:var(--font-mono);color:var(--text);font-size:12px;}
+  .kanban-commercial,.kanban-payment{margin:8px 0 0;font-size:11px;}
   .kanban-commercial select{margin-top:5px;min-height:36px;font-size:12px;}
+  .kanban-payment .unit-input{display:block;margin-top:5px;}
+  .kanban-payment input{min-height:36px;font-size:12px;}
   .kanban-checks{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:6px 0 8px;}
   .kanban-check{display:flex;align-items:center;gap:8px;margin:0;padding:7px 2px;font-size:12px;font-weight:700;cursor:pointer;}
   .kanban-check input{width:17px;height:17px;flex:none;margin:0;accent-color:var(--accent);cursor:pointer;}
