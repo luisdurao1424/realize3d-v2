@@ -367,8 +367,12 @@
   .kanban-card p{margin:5px 0 10px;color:var(--text-faint);font-size:11px;line-height:1.4;}
   .kanban-meta{display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-top:1px solid var(--border-soft);font-size:11px;color:var(--text-dim);}
   .kanban-meta b{font-family:var(--font-mono);color:var(--text);}
-  .kanban-check{display:flex;align-items:center;gap:9px;margin:5px 0 10px;padding:7px 2px;font-size:12px;font-weight:700;cursor:pointer;}
+  .kanban-commercial{margin:8px 0 0;font-size:11px;}
+  .kanban-commercial select{margin-top:5px;min-height:36px;font-size:12px;}
+  .kanban-checks{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:6px 0 8px;}
+  .kanban-check{display:flex;align-items:center;gap:8px;margin:0;padding:7px 2px;font-size:12px;font-weight:700;cursor:pointer;}
   .kanban-check input{width:17px;height:17px;flex:none;margin:0;accent-color:var(--accent);cursor:pointer;}
+  .kanban-check:has(input:disabled){opacity:.45;cursor:not-allowed;}
   .kanban-card .btn{width:100%;justify-content:center;}
   .kanban-empty{padding:24px 8px;text-align:center;color:var(--text-faint);font-size:12px;}
 

@@ -993,13 +993,17 @@ function getProductionStatusView(p){
     : {id:'por_planear', label:'Em planeamento/orçamento', cls:'badge-orc'};
 }
 
+function isPedidoOpen(p){
+  return ['orcamento','em_producao'].includes(getPedidoStatusView(p).id);
+}
+
 function hasProductionTracking(p){
   const status = getPedidoStatusView(p).id;
-  return Boolean(p?.producaoStatus) || status==='orcamento' || status==='vendido';
+  return Boolean(p?.producaoStatus) || status==='orcamento' || status==='em_producao' || status==='vendido';
 }
 
 function isPedidoOverdue(p){
-  if(!p?.prazo || p.deleted === true || getPedidoStatusView(p).id !== 'orcamento') return false;
+  if(!p?.prazo || p.deleted === true || !isPedidoOpen(p)) return false;
   const deadline = new Date(`${p.prazo}T23:59:59`);
   return Number.isFinite(deadline.getTime()) && deadline.getTime() < Date.now();
 }
@@ -1022,10 +1026,10 @@ function getDashboardData(){
   const vendidosMes = pedidos.filter(p=>monthKey(p.data)===currentMonth && p.recebido!==null && p.recebido!==undefined);
   const faturacaoMes = vendidosMes.reduce((sum,p)=>sum+(parseFloat(p.recebido)||0),0);
   const lucroMes = vendidosMes.reduce((sum,p)=>sum+((parseFloat(p.recebido)||0)-getPedidoCostValues(p).custoFinal),0);
-  const emAberto = pedidos.filter(p=>getPedidoStatusView(p).id==='orcamento' && hasProductionTracking(p)).length;
+  const emAberto = pedidos.filter(p=>isPedidoOpen(p) && hasProductionTracking(p)).length;
   const porReceber = pedidos.reduce((sum,p)=>{
     const status = getPedidoStatusView(p).id;
-    if(status==='orcamento' || status==='entregue') return sum;
+    if(isPedidoOpen(p) || status==='entregue') return sum;
     return sum + Math.max(0, getPedidoCostValues(p).precoVenda-(parseFloat(p.recebido)||0));
   },0);
 
@@ -1093,10 +1097,21 @@ function renderDashboard(){
   `;
 }
 
-async function markPedidoPrinted(id){
+async function markPedidoPrinted(id, printed){
   const pedido = state.pedidos.find(p=>p.id===id);
-  if(!pedido || pedido.deleted===true || getPedidoStatusView(pedido).id!=='orcamento' || pedido.producaoStatus==='pronto') return;
-  pedido.producaoStatus = 'pronto';
+  if(!pedido || pedido.deleted===true || !isPedidoOpen(pedido)) return;
+  const nextStatus = printed ? 'pronto' : 'por_planear';
+  if(pedido.producaoStatus===nextStatus) return;
+  pedido.producaoStatus = nextStatus;
+  if(window.AutoSave) window.AutoSave.schedule();
+  await savePedidos();
+  render();
+}
+
+async function setPedidoCommercialStatus(id, status){
+  const pedido = state.pedidos.find(p=>p.id===id);
+  if(!pedido || pedido.deleted===true || !isPedidoOpen(pedido) || !['orcamento','em_producao'].includes(status) || pedido.status===status) return;
+  pedido.status = status;
   if(window.AutoSave) window.AutoSave.schedule();
   await savePedidos();
   render();
@@ -1104,7 +1119,7 @@ async function markPedidoPrinted(id){
 
 async function markPedidoSold(id){
   const pedido = state.pedidos.find(p=>p.id===id);
-  if(!pedido || pedido.deleted===true || getPedidoStatusView(pedido).id!=='orcamento' || pedido.producaoStatus!=='pronto') return;
+  if(!pedido || pedido.deleted===true || !isPedidoOpen(pedido) || pedido.producaoStatus!=='pronto') return;
   pedido.status = 'vendido';
   if(window.AutoSave) window.AutoSave.schedule();
   await savePedidos();
@@ -1113,7 +1128,7 @@ async function markPedidoSold(id){
 
 function renderProduction(){
   const pedidos = state.pedidos.filter(p=>{
-    if(p.deleted===true || getPedidoStatusView(p).id!=='orcamento') return false;
+    if(p.deleted===true || !isPedidoOpen(p)) return false;
     return hasProductionTracking(p);
   });
   const columns = [
@@ -1132,7 +1147,16 @@ function renderProduction(){
               <div class="kanban-title"><strong>${escapeHtml(p.projeto||'Pedido sem nome')}</strong>${p.prazo?`<time>${fmtDate(p.prazo)}</time>`:''}</div>
               <p>${escapeHtml(getPedidoCliente(p)||'Sem cliente')}${p.contacto?` · ${escapeHtml(p.contacto)}`:''}</p>
               <div class="kanban-meta"><span>${fmtTempoHoras(p.horas)}</span><b>${fmtEUR(getPedidoCostValues(p).precoVenda)}</b></div>
-              <label class="kanban-check"><input type="checkbox" onchange="if(this.checked) ${column.id==='pronto'?'markPedidoSold':'markPedidoPrinted'}('${p.id}')"><span>${column.id==='pronto'?'Vendido':'Impressos'}</span></label>
+              <label class="kanban-commercial">Estado comercial
+                <select onchange="setPedidoCommercialStatus('${p.id}',this.value)">
+                  <option value="orcamento" ${getPedidoStatusView(p).id==='orcamento'?'selected':''}>Orçamento</option>
+                  <option value="em_producao" ${getPedidoStatusView(p).id==='em_producao'?'selected':''}>Em produção</option>
+                </select>
+              </label>
+              <div class="kanban-checks">
+                <label class="kanban-check"><input type="checkbox" ${column.id==='pronto'?'checked':''} onchange="markPedidoPrinted('${p.id}',this.checked)"><span>Impressos</span></label>
+                <label class="kanban-check" ${column.id==='pronto'?'':'title="Marca Impressos primeiro"'}><input type="checkbox" ${column.id==='pronto'?'':'disabled'} onchange="if(this.checked) markPedidoSold('${p.id}')"><span>Vendido</span></label>
+              </div>
               <button class="btn btn-ghost btn-sm" onclick="openEditPedidoModal('${p.id}')">${ICONS.edit} Editar</button>
             </article>`).join('') : `<div class="kanban-empty">Sem pedidos</div>`}
           </div>
@@ -1793,6 +1817,7 @@ function getPedidoStatusView(p){
     return {id:'pago', label:'Pago', cls:'badge-vend'};
   }
   if(p?.status === 'vendido') return {id:'vendido', label:'Vendido', cls:'badge-vend'};
+  if(p?.status === 'em_producao') return {id:'em_producao', label:'Em produção', cls:'badge-printing'};
   return {id:'orcamento', label:'Orçamento', cls:'badge-orc'};
 }
 
@@ -1920,7 +1945,7 @@ function renderHist(){
   const totalVendido = vendidosList.reduce((s,p)=>s+getPedidoCostValues(p).precoVenda,0);
   const totalRecebido = all.filter(p=>p.recebido!==null).reduce((s,p)=>s+p.recebido,0);
   const lucroEstimado = all.reduce((s,p)=>s+(getPedidoCostValues(p).precoVenda-getPedidoCostValues(p).custoFinal),0);
-  const pedidosAbertos = all.filter(p=>p.status!=='vendido' && p.recebido===null).length;
+  const pedidosAbertos = all.filter(isPedidoOpen).length;
   const orcamentos = all.filter(p=>p.status==='orcamento').length;
   const vendidos = vendidosList.length;
 
@@ -1947,6 +1972,7 @@ function renderHist(){
       <select onchange="state.hist.status=this.value; renderHistTable();">
         <option value="todos" ${state.hist.status==='todos'?'selected':''}>Todos os estados</option>
         <option value="orcamento" ${state.hist.status==='orcamento'?'selected':''}>Orçamento</option>
+        <option value="em_producao" ${state.hist.status==='em_producao'?'selected':''}>Em produção</option>
         <option value="vendido" ${state.hist.status==='vendido'?'selected':''}>Vendidos</option>
         <option value="pago" ${state.hist.status==='pago'?'selected':''}>Pagos</option>
         <option value="entregue" ${state.hist.status==='entregue'?'selected':''}>Entregues</option>
@@ -2008,7 +2034,7 @@ function renderHistTable(){
               <button class="btn btn-ghost btn-sm" title="Restaurar" onclick="restorePedidoFromTrash('${p.id}')">${ICONS.check} Restaurar</button>
               <button class="btn btn-danger btn-sm" title="Eliminar definitivamente" onclick="confirmPermanentDeletePedido('${p.id}')">${ICONS.trash} Eliminar definitivamente</button>
             ` : `
-              ${p.status==='orcamento' ? `<button class="btn btn-ghost btn-sm" title="Marcar vendido" onclick="openVendaModal('${p.id}')">${ICONS.euro} Vender</button>` : ''}
+              ${isPedidoOpen(p) ? `<button class="btn btn-ghost btn-sm" title="Marcar vendido" onclick="openVendaModal('${p.id}')">${ICONS.euro} Vender</button>` : ''}
               <button class="btn btn-ghost btn-sm" title="Duplicar" onclick="openDuplicateModal('${p.id}')">${ICONS.copy} Duplicar</button>
               <button class="btn btn-ghost btn-sm" title="Editar" onclick="openEditPedidoModal('${p.id}')">${ICONS.edit} Editar</button>
               <button class="btn btn-danger btn-sm" title="Eliminar" onclick="confirmDeletePedido('${p.id}')">${ICONS.trash} Eliminar</button>
@@ -2063,7 +2089,7 @@ function openEditPedidoModal(id){
     descontoPct:p.costSnapshot?.descontoPct ?? p.descontoPct ?? '',
     custoEnvio:p.costSnapshot?.custoEnvio ?? p.custoEnvio ?? 0,
     envio:p.envio || p.costSnapshot?.envio || null,
-    recebido: p.recebido, status:p.status, producaoStatus:hasProductionTracking(p)?getProductionStatusView(p).id:'', data: p.data||''
+    recebido: p.recebido, data: p.data||''
   }};
   render();
 }
@@ -2223,10 +2249,8 @@ async function saveEditPedido(){
   p.contacto = String(f.contacto||'').trim();
   p.prazo = f.prazo || null;
   p.data = f.data || null;
-  p.status = f.status;
-  p.producaoStatus = f.producaoStatus || null;
   p.recebido = (f.recebido===''||f.recebido===null) ? null : parseFloat(f.recebido);
-  if(p.status==='orcamento') p.recebido = null;
+  if(isPedidoOpen(p)) p.recebido = null;
   p.addOns = addOns;
   p.addons = addons;
   p.maoObraHoras = parseFloat(f.maoObraHoras)||0;
@@ -2922,23 +2946,7 @@ function renderModal(){
       </div>
       <div class="form-section-title">Composição do preço</div>
       <div id="editPedidoCostPreview">${editPedidoCostPreviewHtml(pedido, f)}</div>
-      <div class="row2">
-        <div class="field"><label>Estado comercial</label>
-          <select onchange="state.modal.form.status=this.value;render()">
-            <option value="orcamento" ${f.status==='orcamento'?'selected':''}>Orçamento</option>
-            <option value="vendido" ${f.status==='vendido'?'selected':''}>Vendido</option>
-            <option value="pago" ${f.status==='pago'?'selected':''}>Pago</option>
-            <option value="entregue" ${f.status==='entregue'?'selected':''}>Entregue</option>
-          </select>
-        </div>
-        <div class="field"><label>Recebido</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.recebido===null?'':f.recebido}" oninput="state.modal.form.recebido=this.value" ${f.status==='orcamento'?'disabled':''}><span>€</span></div></div>
-      </div>
-      <div class="field"><label>Estado de produção</label>
-        <select onchange="state.modal.form.producaoStatus=this.value">
-          <option value="por_planear" ${f.producaoStatus==='por_planear'?'selected':''}>Em planeamento/orçamento</option>
-          <option value="pronto" ${f.producaoStatus==='pronto'?'selected':''}>Pronto</option>
-        </select>
-      </div>
+      <div class="field"><label>Recebido</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.recebido===null?'':f.recebido}" oninput="state.modal.form.recebido=this.value" ${isPedidoOpen(pedido)?'disabled':''}><span>€</span></div></div>
       ${pedidoAttachmentsHtml(pedido, m)}
     `, [
       {label:'Cancelar', cls:'btn-ghost', action:'closeModal()'},
