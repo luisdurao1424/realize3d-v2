@@ -2367,7 +2367,7 @@ function renderFilTable(){
       return `<article class="fil-row">
         <div class="fil-name"><span class="fil-label">Marca</span><strong>${escapeHtml(f.marca)}</strong></div>
         <div><span class="fil-label">Material</span>${escapeHtml(f.tipo || f.material || 'Tipo n/d')}</div>
-        <div><span class="fil-label">Cor</span><span class="fil-color"><span style="background:${colorSwatch(f.cor)};"></span>${escapeHtml(f.cor)}</span></div>
+        <div><span class="fil-label">Cor</span><span class="fil-color"><span style="background:${filamentSwatch(f)};"></span>${escapeHtml(f.cor)}</span></div>
         <div class="mono"><span class="fil-label">Compra</span>${fmtEUR(purchasePrice)}</div>
         <div class="mono"><span class="fil-label">€/kg</span><b class="fil-price">${fmtEUR(getPrecoKgFilamento(f))}</b></div>
         <div class="muted"><span class="fil-label">Fornecedor</span>${escapeHtml(supplier || 'n/d')}</div>
@@ -2416,12 +2416,38 @@ async function restoreFilament(id){
 
 function colorSwatch(name){
   const map = {
-    'branco':'#e8e8e8','branco frio':'#f2f2f2','branco 2':'#e8e8e8','preto':'#222','rosa':'#f2a0c4','azul celeste':'#8fcdf0',
-    'madeira':'#b98554','wood':'#b98554','mármore':'#d9d3c8','amarelo':'#f5d833','laranja':'#f28c28','dourado':'#d4af37',
-    'castanho':'#6b4226','verde abacate':'#8aa04b'
+    'branco':'#e8e8e8','branco frio':'#f2f2f2','branco 2':'#e8e8e8','preto':'#222222',
+    'rosa':'#f2a0c4','azul celeste':'#8fcdf0','lilas':'#b59ad9','bege':'#d7c6aa',
+    'cinzento':'#929a9e','cinza':'#929a9e','verde azeitona':'#777e45',
+    'madeira':'#b98554','wood':'#b98554','marmore':'#d9d3c8','amarelo':'#f5d833',
+    'laranja':'#f28c28','dourado':'#d4af37','castanho':'#6b4226','verde abacate':'#8aa04b',
+    'vermelho':'#d94b45','azul':'#477bbd','verde':'#409b69','roxo':'#8059ac',
+    'violeta':'#8f70ba','prateado':'#adb5bb','prata':'#adb5bb','transparente':'#e3ecec'
   };
-  const k = (name||'').toLowerCase().trim();
-  return map[k] || '#8B7CF6';
+  const k = normalizeSearchText(name).trim();
+  if(map[k]) return map[k];
+  const base = k.match(/\b(branco|preto|rosa|azul|verde|amarelo|laranja|vermelho|cinzento|cinza|bege|lilas|roxo|violeta|castanho|dourado|prata|prateado)\b/);
+  return base ? map[base[0]] : '#aab2ae';
+}
+
+function filamentSwatch(filamento){
+  const custom = String(filamento?.corHex || '');
+  return /^#[0-9a-f]{6}$/i.test(custom) ? custom : colorSwatch(filamento?.cor);
+}
+
+function updateFilamentColorPreview(){
+  if(state.modal?.type!=='fil') return;
+  const picker = document.getElementById('filamentColorPicker');
+  const label = document.getElementById('filamentColorMode');
+  const reset = document.getElementById('filamentColorReset');
+  if(picker) picker.value = filamentSwatch(state.modal.form);
+  if(label) label.textContent = state.modal.form.corHex ? 'Cor personalizada' : 'Sugerida pelo nome';
+  if(reset) reset.hidden = !state.modal.form.corHex;
+}
+
+function resetFilamentColor(){
+  state.modal.form.corHex = '';
+  updateFilamentColorPreview();
 }
 
 function openFilModal(id){
@@ -2431,6 +2457,7 @@ function openFilModal(id){
       marca:f.marca,
       tipo:f.tipo||f.material||'',
       cor:f.cor,
+      corHex:f.corHex||'',
       preco:getFilamentPurchasePrice(f),
       spool:f.spool||1,
       dataCompra:getFilamentPurchaseDate(f),
@@ -2440,7 +2467,7 @@ function openFilModal(id){
       bed:f.bed||''
     }};
   }else{
-    state.modal = {type:'fil', id:null, form:{marca:'',tipo:'',cor:'',preco:'',spool:1,dataCompra:todayISO(),fornecedor:'',density:'',nozzle:'',bed:''}};
+    state.modal = {type:'fil', id:null, form:{marca:'',tipo:'',cor:'',corHex:'',preco:'',spool:1,dataCompra:todayISO(),fornecedor:'',density:'',nozzle:'',bed:''}};
   }
   render();
 }
@@ -2453,7 +2480,7 @@ async function saveFilModal(){
   if(isNaN(preco) || preco<0){ toast('Indica o preço de compra'); return; }
   const precoKg = preco/spool;
   const rec = {
-    marca:f.marca.trim(), tipo:f.tipo.trim(), cor:f.cor.trim(), preco, spool,
+    marca:f.marca.trim(), tipo:f.tipo.trim(), cor:f.cor.trim(), corHex:/^#[0-9a-f]{6}$/i.test(f.corHex || '') ? f.corHex : '', preco, spool,
     dataCompra:f.dataCompra || '', fornecedor:(f.fornecedor||'').trim(),
     density:f.density?parseFloat(f.density):null, nozzle:f.nozzle?parseFloat(f.nozzle):null, bed:f.bed?parseFloat(f.bed):null
   };
@@ -2778,7 +2805,15 @@ function renderModal(){
       <div class="row3">
         <div class="field"><label>Marca</label><input type="text" value="${escapeHtml(f.marca)}" oninput="state.modal.form.marca=this.value" placeholder="ex: Elegoo"></div>
         <div class="field"><label>Material / acabamento</label><input type="text" value="${escapeHtml(f.tipo)}" oninput="state.modal.form.tipo=this.value" placeholder="ex: PLA Matte"></div>
-        <div class="field"><label>Cor</label><input type="text" value="${escapeHtml(f.cor)}" oninput="state.modal.form.cor=this.value" placeholder="ex: Branco"></div>
+        <div class="field"><label>Cor</label><input type="text" value="${escapeHtml(f.cor)}" oninput="state.modal.form.cor=this.value;updateFilamentColorPreview()" placeholder="ex: Branco"></div>
+      </div>
+      <div class="field">
+        <label for="filamentColorPicker">Amostra da cor</label>
+        <div class="filament-color-control">
+          <input id="filamentColorPicker" type="color" value="${filamentSwatch(f)}" aria-label="Escolher cor da bobina" oninput="state.modal.form.corHex=this.value;updateFilamentColorPreview()">
+          <span id="filamentColorMode">${f.corHex ? 'Cor personalizada' : 'Sugerida pelo nome'}</span>
+          <button id="filamentColorReset" type="button" class="btn btn-ghost btn-sm" onclick="resetFilamentColor()" ${f.corHex ? '' : 'hidden'}>Usar cor do nome</button>
+        </div>
       </div>
       <div class="row2">
         <div class="field"><label>Peso da bobina</label><div class="unit-input"><input type="number" step="any" min="0.01" value="${f.spool}" oninput="state.modal.form.spool=this.value"><span>kg</span></div></div>
