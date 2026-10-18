@@ -1319,6 +1319,7 @@ function modalRemoveMaterial(id){
 function modalUpdateMaterial(id, field, value){
   const m = state.modal.form.materiais.find(x=>x.id===id);
   if(m) m[field] = value;
+  updateEditPedidoCostPreview();
 }
 
 function addOnRowHtml(addOn, ctx, canRemove){
@@ -1354,6 +1355,7 @@ function modalRemoveAddOn(id){
 function modalUpdateAddOn(id, field, value){
   const addOn = state.modal.form.addOns.find(item=>item.id===id);
   if(addOn) addOn[field] = value;
+  updateEditPedidoCostPreview();
 }
 
 function currentCalcInputs(){
@@ -1472,6 +1474,121 @@ function updateCalcPreview(){
       </div>
     </div>
   `;
+}
+
+function getEditPedidoCostPreview(pedido, form){
+  const taxaFalhas = pedido.costSnapshot?.taxaFalhas ?? pedido.taxaFalhas ?? state.config.taxaFalhas;
+  const margemLucro = pedido.costSnapshot?.margem ?? pedido.margemLucro ?? state.config.margemLucro;
+  const addOns = getStoredAddOns(form.addOns, form.addons);
+  const addons = getAddOnsTotal(form.addOns, form.addons);
+
+  if(!sameCostInputs(pedido, form)){
+    const materiais = resolveMateriais(form.materiais);
+    return {
+      materiais,
+      addOns,
+      taxaFalhas,
+      margemLucro,
+      breakdown:calcBreakdown({
+        materiais,
+        horas:form.horas,
+        addons,
+        taxaFalhas,
+        margemLucro,
+        maoObraHoras:form.maoObraHoras,
+        posProcessamento:form.posProcessamento,
+        descontoPct:form.descontoPct,
+        custoEnvio:form.custoEnvio
+      })
+    };
+  }
+
+  const costs = getPedidoCostValues(pedido);
+  const materiaisGuardados = getPedidoSnapshotMateriais(pedido);
+  const materiais = (materiaisGuardados.length ? materiaisGuardados : (pedido.materiais || [])).map(m=>{
+    const gramas = parseFloat(m.gramas)||0;
+    const custoFilamento = parseFloat(m.custoFilamento)||0;
+    const precoKg = parseFloat(m.lotePrecoKg ?? m.precoKg) || (gramas>0 ? (custoFilamento*1000)/gramas : 0);
+    return {
+      ...m,
+      gramas,
+      precoKg,
+      loteSnapshot:m.loteSnapshot || {
+        loteFornecedor:m.loteFornecedor || '',
+        loteData:m.loteData || ''
+      }
+    };
+  });
+  const bufferFalhas = pedido.bufferFalhas ?? Math.max(0, costs.precoVenda - costs.custoFinal - costs.lucroValor);
+  return {
+    materiais,
+    addOns,
+    taxaFalhas,
+    margemLucro,
+    breakdown:{
+      ...costs,
+      addons:pedido.costSnapshot?.addons ?? pedido.addons ?? addons,
+      custoOperacional:Math.max(0, costs.custoFinal - costs.custoEnvio),
+      bufferFalhas
+    }
+  };
+}
+
+function editPedidoCostPreviewHtml(pedido, form){
+  const {materiais,addOns,margemLucro,breakdown:b} = getEditPedidoCostPreview(pedido, form);
+  const validMateriais = materiais.filter(m=>m.marca && m.gramas>0);
+  return `
+    <div class="calc-summary-grid">
+      <div class="calc-summary-card"><span>Custo filamento</span><b>${fmtEUR(b.custoFilamento)}</b></div>
+      <div class="calc-summary-card"><span>Eletricidade</span><b>${fmtEUR(b.custoEletricidade)}</b></div>
+      <div class="calc-summary-card"><span>Desgaste máquina</span><b>${fmtEUR(b.custoMaquina)}</b></div>
+      <div class="calc-summary-card"><span>Mão de obra</span><b>${fmtEUR(b.custoMaoObra)}</b></div>
+      <div class="calc-summary-card"><span>Pós-processamento</span><b>${fmtEUR(b.custoPosProcessamento)}</b></div>
+      <div class="calc-summary-card"><span>Envio</span><b>${fmtEUR(b.custoEnvio)}</b></div>
+      <div class="calc-summary-card"><span>Taxa de falhas</span><b>${fmtEUR(b.bufferFalhas)}</b></div>
+      <div class="calc-summary-card"><span>Add-ons</span><b>${fmtEUR(b.addons)}</b></div>
+      <div class="calc-summary-card"><span>Custo total</span><b>${fmtEUR(b.custoFinal)}</b></div>
+      <div class="calc-summary-card highlight"><span>Preço sugerido</span><b>${fmtEUR(b.precoVenda)}</b></div>
+      <div class="calc-summary-card"><span>Lucro estimado</span><b class="${b.lucroValor>=0?'pos':'neg'}">${fmtEUR(b.lucroValor)}</b></div>
+      ${b.descontoValor>0?`<div class="calc-summary-card"><span>Desconto</span><b class="neg">-${fmtEUR(b.descontoValor)}</b></div>`:''}
+    </div>
+    <div class="calc-final-card">
+      <span>Resumo final</span>
+      <strong>${fmtEUR(b.precoVenda)}</strong>
+      <small>Custo total ${fmtEUR(b.custoFinal)} · lucro ${fmtEUR(b.lucroValor)} · margem ${fmtPct(margemLucro)}</small>
+    </div>
+    ${validMateriais.length ? `<div class="calc-material-list">
+      ${validMateriais.map(m=>{
+        const lote = m.loteSnapshot || {};
+        const custo = (m.gramas*m.precoKg)/1000;
+        return `<div class="calc-material-card">
+          <div class="calc-material-main">
+            <strong>${[m.marca,m.tipo,m.cor].filter(Boolean).map(escapeHtml).join(' · ')}</strong>
+            <span>${lote.loteFornecedor ? escapeHtml(lote.loteFornecedor) : 'Fornecedor n/d'}${lote.loteData ? ` · ${fmtDate(lote.loteData)}` : ''}</span>
+          </div>
+          <div class="calc-material-values">
+            <span>${fmtEUR(m.precoKg)}/kg</span>
+            <span>${fmtNum(m.gramas)} g</span>
+            <b>${fmtEUR(custo)}</b>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>` : ''}
+    ${addOns.length ? `<div class="addon-preview-list">
+      <div class="addon-preview-title">Add-ons</div>
+      ${addOns.map(addOn=>`<div class="addon-preview-row"><span>${escapeHtml(addOn.nome || 'Add-on sem descrição')}</span><b>${fmtEUR(addOn.valor)}</b></div>`).join('')}
+      <div class="addon-preview-row total"><span>Total</span><b>${fmtEUR(b.addons)}</b></div>
+    </div>` : ''}
+  `;
+}
+
+function updateEditPedidoCostPreview(){
+  const modal = state.modal;
+  if(modal?.type!=='editPedido') return;
+  const pedido = state.pedidos.find(p=>p.id===modal.id);
+  const target = document.getElementById('editPedidoCostPreview');
+  if(!pedido || !target) return;
+  target.innerHTML = editPedidoCostPreviewHtml(pedido, modal.form);
 }
 
 async function saveCalcToHistory(){
@@ -2754,22 +2871,24 @@ function renderModal(){
       </div>
       ${pedidoLoteDetailHtml(pedido)}
       <div class="row2">
-        <div class="field"><label>Tempo (total)</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.horas}" oninput="state.modal.form.horas=this.value"><span>h</span></div></div>
+        <div class="field"><label>Tempo (total)</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.horas}" oninput="state.modal.form.horas=this.value;updateEditPedidoCostPreview()"><span>h</span></div></div>
         <div class="field"><label>Data</label><input type="date" value="${f.data}" oninput="state.modal.form.data=this.value"></div>
       </div>
       <div class="row2">
-        <div class="field"><label>Tempo de mão de obra</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.maoObraHoras}" oninput="state.modal.form.maoObraHoras=this.value"><span>h</span></div></div>
-        <div class="field"><label>Pós-processamento</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.posProcessamento}" oninput="state.modal.form.posProcessamento=this.value"><span>€</span></div></div>
+        <div class="field"><label>Tempo de mão de obra</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.maoObraHoras}" oninput="state.modal.form.maoObraHoras=this.value;updateEditPedidoCostPreview()"><span>h</span></div></div>
+        <div class="field"><label>Pós-processamento</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.posProcessamento}" oninput="state.modal.form.posProcessamento=this.value;updateEditPedidoCostPreview()"><span>€</span></div></div>
       </div>
       <div class="row2">
-        <div class="field"><label>Envio</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.custoEnvio}" oninput="state.modal.form.custoEnvio=this.value;state.modal.form.envio=null"><span>€</span></div></div>
-        <div class="field"><label>Desconto</label><div class="unit-input"><input type="number" step="any" min="0" max="100" value="${f.descontoPct}" oninput="state.modal.form.descontoPct=this.value"><span>%</span></div></div>
+        <div class="field"><label>Envio</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.custoEnvio}" oninput="state.modal.form.custoEnvio=this.value;state.modal.form.envio=null;updateEditPedidoCostPreview()"><span>€</span></div></div>
+        <div class="field"><label>Desconto</label><div class="unit-input"><input type="number" step="any" min="0" max="100" value="${f.descontoPct}" oninput="state.modal.form.descontoPct=this.value;updateEditPedidoCostPreview()"><span>%</span></div></div>
       </div>
       <div class="field">
         <label>Add-ons</label>
         ${f.addOns.map(addOn=>addOnRowHtml(addOn,'modal',f.addOns.length>1)).join('')}
         <button type="button" class="btn btn-ghost btn-sm" onclick="modalAddAddOn()">${ICONS.plus} Adicionar add-on</button>
       </div>
+      <div class="form-section-title">Composição do preço</div>
+      <div id="editPedidoCostPreview">${editPedidoCostPreviewHtml(pedido, f)}</div>
       <div class="row2">
         <div class="field"><label>Estado comercial</label>
           <select onchange="state.modal.form.status=this.value;render()">
