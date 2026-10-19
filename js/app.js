@@ -1214,6 +1214,7 @@ function renderProduction(){
                 <div><span>Tempo</span><b>${fmtTempoHoras(p.horas)}</b></div>
                 <div><span>Custo total</span><b>${fmtEUR(costs.custoFinal)}</b></div>
                 <div><span>Preço sugerido</span><b>${fmtEUR(costs.precoVenda)}</b></div>
+                ${costs.custoEnvio>0 ? `<div><span>Envio</span><b>${fmtEUR(costs.custoEnvio)}</b></div>` : ''}
               </div>
               <label class="kanban-commercial">Estado comercial
                 <select onchange="setPedidoCommercialStatus('${p.id}',this.value)">
@@ -1877,6 +1878,7 @@ function setShippingOption(option, enabled){
 function renderShippingQuote(){
   const host = document.getElementById('shippingQuote');
   if(!host || !shippingModule) return;
+  const pedido = state.pedidos.find(p=>p.id===state.shipping.pedidoId && p.deleted!==true);
   if(!state.shipping.weight){
     host.innerHTML = `<div class="shipping-empty">${ICONS.box}<p>Indica o peso para calcular o envio.</p></div>`;
     return;
@@ -1902,6 +1904,7 @@ function renderShippingQuote(){
         </select>
         <button class="btn btn-ghost" onclick="attachShippingToPedido()" ${state.shipping.pedidoId?'':'disabled'}>Guardar no pedido</button>
       </div>
+      ${pedido && getPedidoCostValues(pedido).custoEnvio>0 ? `<div class="shipping-note">Envio já guardado no pedido: ${fmtEUR(getPedidoCostValues(pedido).custoEnvio)}</div>` : ''}
     </div>
     <div class="shipping-source">Preçário base CTT ${quote.tariffYear}. Confirma dimensões e condições no <a href="${shippingModule.CTT_TARIFF.source}" target="_blank" rel="noopener">preçário oficial</a>.</div>
   `;
@@ -1959,6 +1962,7 @@ async function attachShippingToPedido(){
   }
   if(window.AutoSave) window.AutoSave.schedule();
   await savePedidos();
+  renderShippingQuote();
   toast('Envio guardado no pedido');
 }
 
@@ -2175,7 +2179,7 @@ function renderHistTable(){
         return `<article class="history-row">
           <div class="history-name">
             <strong>${escapeHtml(p.projeto || 'Pedido sem nome')}</strong>
-            <span>${cliente ? `${escapeHtml(cliente)} · ` : ''}${data}${p.prazo ? ` · entrega ${fmtDate(p.prazo)}` : ''}${getPedidoAttachments(p).length ? ` · ${getPedidoAttachments(p).length} anexo${getPedidoAttachments(p).length===1?'':'s'}` : ''}</span>
+            <span>${cliente ? `${escapeHtml(cliente)} · ` : ''}${data}${p.prazo ? ` · entrega ${fmtDate(p.prazo)}` : ''}${costs.custoEnvio>0 ? ` · envio ${fmtEUR(costs.custoEnvio)}` : ''}${getPedidoAttachments(p).length ? ` · ${getPedidoAttachments(p).length} anexo${getPedidoAttachments(p).length===1?'':'s'}` : ''}</span>
           </div>
           <div class="history-cell"><span class="history-label">Estado</span><span class="badge ${status.cls}">${status.label}</span>${hasProductionTracking(p)?`<span class="badge ${getProductionStatusView(p).cls}" style="margin-top:4px;">${getProductionStatusView(p).label}</span>`:''}</div>
           <div class="history-cell mono" title="${escapeAttr(materiaisTooltip)}"><span class="history-label">Gramas</span><b>${fmtNum(getPedidoGramasTotal(p))} g</b></div>
