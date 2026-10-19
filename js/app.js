@@ -97,6 +97,7 @@ let state = {
   hist: {search:'', status:'todos', sort:'data_desc'},
   fil: {search:'', material:'todos', status:'ativos', sort:'recentes'},
   productionPayments: {},
+  productionPrices: {},
   shipping: {service:'normal', weight:'', cod:false, codAmount:'', receipt:false, electronic:false, own:false, vatRate:0.23, pedidoId:''},
   modal: null, // {type, data}
   sidebarOpen:false,
@@ -205,6 +206,7 @@ function applyPayload(payload){
   migrateFilamentosToLotes();
   state.pedidos = payload.pedidos || [];
   state.productionPayments = {};
+  state.productionPrices = {};
   syncStoreState();
 }
 function currentPayload(){
@@ -999,6 +1001,23 @@ function isPedidoOpen(p){
   return ['orcamento','em_producao'].includes(getPedidoStatusView(p).id);
 }
 
+function getPedidoSalePrice(p){
+  if(p.precoAcordado !== null && p.precoAcordado !== undefined && Number.isFinite(Number(p.precoAcordado))){
+    return Number(p.precoAcordado);
+  }
+  // Antes de existir preco acordado, um pagamento registado representava a venda completa.
+  if(p.recebido !== null && p.recebido !== undefined && Number.isFinite(Number(p.recebido))){
+    return Number(p.recebido);
+  }
+  return getPedidoCostValues(p).precoVenda;
+}
+
+function getPedidoAmountDue(p){
+  const pronto = p.producaoStatus === 'pronto' && ['orcamento','em_producao'].includes(p.status);
+  if((p.status !== 'vendido' && !pronto) || p.pago === true || p.entregue === true) return 0;
+  return Math.max(0, Math.round((getPedidoSalePrice(p) - (Number(p.recebido) || 0)) * 100) / 100);
+}
+
 function hasProductionTracking(p){
   const status = getPedidoStatusView(p).id;
   return Boolean(p?.producaoStatus) || status==='orcamento' || status==='em_producao' || status==='vendido';
@@ -1029,11 +1048,7 @@ function getDashboardData(){
   const faturacaoMes = vendidosMes.reduce((sum,p)=>sum+(parseFloat(p.recebido)||0),0);
   const lucroMes = vendidosMes.reduce((sum,p)=>sum+((parseFloat(p.recebido)||0)-getPedidoCostValues(p).custoFinal),0);
   const emAberto = pedidos.filter(p=>isPedidoOpen(p) && hasProductionTracking(p)).length;
-  const porReceber = pedidos.reduce((sum,p)=>{
-    const status = getPedidoStatusView(p).id;
-    if(isPedidoOpen(p) || status==='entregue') return sum;
-    return sum + Math.max(0, getPedidoCostValues(p).precoVenda-(parseFloat(p.recebido)||0));
-  },0);
+  const porReceber = pedidos.reduce((sum,p)=>sum+getPedidoAmountDue(p),0);
 
   const monthly = [];
   const now = new Date();
@@ -1104,10 +1119,36 @@ async function markPedidoPrinted(id, printed){
   if(!pedido || pedido.deleted===true || !isPedidoOpen(pedido)) return;
   const nextStatus = printed ? 'pronto' : 'por_planear';
   if(pedido.producaoStatus===nextStatus) return;
+  if(printed){
+    const precoTexto = String(state.productionPrices[id] ?? pedido.precoAcordado ?? getPedidoCostValues(pedido).precoVenda.toFixed(2)).trim();
+    if(!/^\d+(?:[.,]\d{1,2})?$/.test(precoTexto)){
+      toast('Indica um preço acordado válido');
+      render();
+      return;
+    }
+    pedido.precoAcordado = Number(precoTexto.replace(',','.'));
+  }
   pedido.producaoStatus = nextStatus;
   if(window.AutoSave) window.AutoSave.schedule();
   await savePedidos();
   render();
+}
+
+async function saveProductionPrice(id, value){
+  const pedido = state.pedidos.find(p=>p.id===id);
+  if(!pedido || pedido.deleted===true || !isPedidoOpen(pedido) || pedido.producaoStatus!=='pronto') return;
+  const precoTexto = String(value).trim();
+  if(!/^\d+(?:[.,]\d{1,2})?$/.test(precoTexto)){
+    toast('Indica um preço acordado válido');
+    state.productionPrices[id] = pedido.precoAcordado ?? getPedidoCostValues(pedido).precoVenda.toFixed(2);
+    render();
+    return;
+  }
+  const precoAcordado = Number(precoTexto.replace(',','.'));
+  if(pedido.precoAcordado===precoAcordado) return;
+  pedido.precoAcordado = precoAcordado;
+  if(window.AutoSave) window.AutoSave.schedule();
+  await savePedidos();
 }
 
 async function setPedidoCommercialStatus(id, status){
@@ -1122,6 +1163,13 @@ async function setPedidoCommercialStatus(id, status){
 async function markPedidoSold(id){
   const pedido = state.pedidos.find(p=>p.id===id);
   if(!pedido || pedido.deleted===true || !isPedidoOpen(pedido) || pedido.producaoStatus!=='pronto') return;
+  const precoTexto = String(state.productionPrices[id] ?? pedido.precoAcordado ?? getPedidoCostValues(pedido).precoVenda.toFixed(2)).trim();
+  const precoAcordado = Number(precoTexto.replace(',','.'));
+  if(!/^\d+(?:[.,]\d{1,2})?$/.test(precoTexto) || !Number.isFinite(precoAcordado)){
+    toast('Indica um preço acordado válido');
+    render();
+    return;
+  }
   const valor = String(state.productionPayments[id] ?? pedido.recebido ?? '').trim();
   const recebido = valor ? Number(valor.replace(',','.')) : null;
   if(valor && (!/^\d+(?:[.,]\d{1,2})?$/.test(valor) || !Number.isFinite(recebido))){
@@ -1129,9 +1177,11 @@ async function markPedidoSold(id){
     render();
     return;
   }
+  pedido.precoAcordado = precoAcordado;
   pedido.recebido = recebido;
   pedido.status = 'vendido';
   delete state.productionPayments[id];
+  delete state.productionPrices[id];
   if(window.AutoSave) window.AutoSave.schedule();
   await savePedidos();
   render();
@@ -1170,6 +1220,9 @@ function renderProduction(){
                   <option value="orcamento" ${getPedidoStatusView(p).id==='orcamento'?'selected':''}>Orçamento</option>
                   <option value="em_producao" ${getPedidoStatusView(p).id==='em_producao'?'selected':''}>Em produção</option>
                 </select>
+              </label>
+              <label class="kanban-payment">Preço acordado
+                <span class="unit-input"><input type="text" inputmode="decimal" value="${escapeAttr(state.productionPrices[p.id] ?? p.precoAcordado ?? costs.precoVenda.toFixed(2))}" oninput="state.productionPrices['${p.id}']=this.value" onchange="saveProductionPrice('${p.id}',this.value)"><span>€</span></span>
               </label>
               <label class="kanban-payment">Valor pago
                 <span class="unit-input"><input type="text" inputmode="decimal" placeholder="0,00" value="${escapeAttr(state.productionPayments[p.id] ?? p.recebido ?? '')}" oninput="state.productionPayments['${p.id}']=this.value"><span>€</span></span>
@@ -1915,7 +1968,7 @@ async function attachShippingToPedido(){
 function getPedidoStatusView(p){
   if(p?.deleted === true) return {id:'lixo', label:'Lixo', cls:'badge-orc'};
   if(p?.status === 'entregue' || p?.entregue === true) return {id:'entregue', label:'Entregue', cls:'badge-vend'};
-  if(p?.status === 'pago' || p?.pago === true || (p?.status === 'vendido' && p?.recebido !== null && p?.recebido !== undefined)){
+  if(p?.status === 'pago' || p?.pago === true || (p?.status === 'vendido' && p?.recebido !== null && p?.recebido !== undefined && getPedidoAmountDue(p)===0)){
     return {id:'pago', label:'Pago', cls:'badge-vend'};
   }
   if(p?.status === 'vendido') return {id:'vendido', label:'Vendido', cls:'badge-vend'};
@@ -2044,7 +2097,7 @@ function renderHist(){
   const list = pedidosFiltrados();
   const all = state.pedidos.filter(p=>p.deleted !== true);
   const vendidosList = all.filter(p=>p.status==='vendido' || p.recebido!==null);
-  const totalVendido = vendidosList.reduce((s,p)=>s+getPedidoCostValues(p).precoVenda,0);
+  const totalVendido = vendidosList.reduce((s,p)=>s+getPedidoSalePrice(p),0);
   const totalRecebido = all.filter(p=>p.recebido!==null).reduce((s,p)=>s+p.recebido,0);
   const lucroEstimado = all.reduce((s,p)=>s+(getPedidoCostValues(p).precoVenda-getPedidoCostValues(p).custoFinal),0);
   const pedidosAbertos = all.filter(isPedidoOpen).length;
@@ -2128,7 +2181,7 @@ function renderHistTable(){
           <div class="history-cell mono" title="${escapeAttr(materiaisTooltip)}"><span class="history-label">Gramas</span><b>${fmtNum(getPedidoGramasTotal(p))} g</b></div>
           <div class="history-cell mono"><span class="history-label">Tempo</span><b>${fmtTempoHoras(p.horas)}</b></div>
           <div class="history-cell mono" title="${escapeAttr(custosTooltip)}"><span class="history-label">Custo</span><b>${fmtEUR(costs.custoFinal)}</b></div>
-          <div class="history-cell mono"><span class="history-label">Venda</span><b>${fmtEUR(costs.precoVenda)}</b></div>
+          <div class="history-cell mono" title="${p.precoAcordado != null ? 'Preço acordado' : hasRecebido ? 'Registo antigo: preço inferido do valor recebido' : 'Preço sugerido; ainda sem preço acordado registado'}"><span class="history-label">Venda</span><b>${fmtEUR(getPedidoSalePrice(p))}</b></div>
           <div class="history-cell mono"><span class="history-label">Recebido</span><b>${hasRecebido ? fmtEUR(p.recebido) : '—'}</b></div>
           <div class="history-cell mono"><span class="history-label">Lucro</span><b class="${lucroCls}">${lucro===null ? '—' : fmtEUR(lucro)}</b></div>
           <div class="history-actions row-actions">
@@ -2149,7 +2202,7 @@ function renderHistTable(){
 }
 
 function exportCSV(){
-  const headers = ['Projeto','Cliente','Contacto','Prazo','EstadoComercial','EstadoProducao','Materiais','GramasTotal','HorasImpressao','HorasMaoObra','Addons','AddonsDetalhe','CustoFilamento','CustoEletricidade','CustoMaquina','CustoMaoObra','PosProcessamento','CustoEnvio','Desconto','CustoFinal','PrecoVendaSugerido','Recebido','Lucro','Anexos','NomesAnexos','Data'];
+  const headers = ['Projeto','Cliente','Contacto','Prazo','EstadoComercial','EstadoProducao','Materiais','GramasTotal','HorasImpressao','HorasMaoObra','Addons','AddonsDetalhe','CustoFilamento','CustoEletricidade','CustoMaquina','CustoMaoObra','PosProcessamento','CustoEnvio','Desconto','CustoFinal','PrecoVendaSugerido','PrecoAcordado','Recebido','Lucro','Anexos','NomesAnexos','Data'];
   const rows = state.pedidos.filter(p=>p.deleted !== true).map(p=>{
     const costs = getPedidoCostValues(p);
     return [
@@ -2158,7 +2211,7 @@ function exportCSV(){
       (p.materiais||[]).map(m=>`${m.marca} ${m.tipo||''} ${m.cor} (${m.gramas}g)`.replace(/\s+/g,' ').trim()).join(' + '),
       (p.materiais||[]).reduce((s,m)=>s+(m.gramas||0),0),
       p.horas,p.costSnapshot?.maoObraHoras ?? p.maoObraHoras ?? 0,p.costSnapshot?.addons ?? p.addons ?? 0,getPedidoAddOns(p).map(addOn=>`${addOn.nome}: ${addOn.valor.toFixed(2)} EUR`).join(' + '),
-      costs.custoFilamento.toFixed(4),costs.custoEletricidade.toFixed(4),costs.custoMaquina.toFixed(4),costs.custoMaoObra.toFixed(4),costs.custoPosProcessamento.toFixed(4),costs.custoEnvio.toFixed(4),costs.descontoValor.toFixed(4),costs.custoFinal.toFixed(4),costs.precoVenda.toFixed(4),
+      costs.custoFilamento.toFixed(4),costs.custoEletricidade.toFixed(4),costs.custoMaquina.toFixed(4),costs.custoMaoObra.toFixed(4),costs.custoPosProcessamento.toFixed(4),costs.custoEnvio.toFixed(4),costs.descontoValor.toFixed(4),costs.custoFinal.toFixed(4),costs.precoVenda.toFixed(4),isPedidoOpen(p)?'':getPedidoSalePrice(p).toFixed(2),
       p.recebido!==null?p.recebido:'', p.recebido!==null?(p.recebido-costs.custoFinal).toFixed(4):'', getPedidoAttachments(p).length, getPedidoAttachments(p).map(anexo=>anexo.nome).join(' | '), p.data||''
     ];
   });
@@ -2175,8 +2228,16 @@ function exportCSV(){
 function openVendaModal(id){
   const p = state.pedidos.find(x=>x.id===id);
   if(!p) return;
-  state.modal = {type:'venda', id, valor: getPedidoCostValues(p).precoVenda.toFixed(2)};
+  const sugerido = getPedidoCostValues(p).precoVenda.toFixed(2);
+  state.modal = {type:'venda', id, precoAcordado:sugerido, valor:sugerido};
   render();
+}
+function updateVendaPrice(input){
+  if(state.modal.valor === state.modal.precoAcordado){
+    state.modal.valor = input.value;
+    document.getElementById('vendaRecebido').value = input.value;
+  }
+  state.modal.precoAcordado = input.value;
 }
 function openEditPedidoModal(id){
   const p = state.pedidos.find(x=>x.id===id);
@@ -2191,6 +2252,7 @@ function openEditPedidoModal(id){
     descontoPct:p.costSnapshot?.descontoPct ?? p.descontoPct ?? '',
     custoEnvio:p.costSnapshot?.custoEnvio ?? p.custoEnvio ?? 0,
     envio:p.envio || p.costSnapshot?.envio || null,
+    precoAcordado: isPedidoOpen(p) ? null : getPedidoSalePrice(p).toFixed(2),
     recebido: p.recebido, data: p.data||''
   }};
   render();
@@ -2290,7 +2352,7 @@ async function doDuplicatePedido(){
     addons, addOns:addOns.map(addOn=>({...addOn})),
     anexos:[],
     cliente:'', contacto:'', prazo:null,
-    recebido: null, status:'orcamento', producaoStatus:'por_planear', data: todayISO(),
+    precoAcordado:null, recebido:null, status:'orcamento', producaoStatus:'por_planear', data:todayISO(),
     costSnapshot:null
   };
   delete novo.costSnapshot;
@@ -2319,9 +2381,17 @@ async function confirmVenda(){
   const m = state.modal;
   const p = state.pedidos.find(x=>x.id===m.id);
   if(!p) return;
-  const valor = parseFloat(m.valor);
-  if(isNaN(valor) || valor<0){ toast('Indica um valor válido'); return; }
-  p.recebido = valor;
+  const precoAcordado = Number(String(m.precoAcordado).replace(',','.'));
+  const valorTexto = String(m.valor ?? '').trim();
+  const recebido = valorTexto === '' ? null : Number(valorTexto.replace(',','.'));
+  if(!/^\d+(?:[.,]\d{1,2})?$/.test(String(m.precoAcordado)) || !Number.isFinite(precoAcordado)){
+    toast('Indica um preço acordado válido'); return;
+  }
+  if(valorTexto && (!/^\d+(?:[.,]\d{1,2})?$/.test(valorTexto) || !Number.isFinite(recebido))){
+    toast('Indica um valor recebido válido'); return;
+  }
+  p.precoAcordado = precoAcordado;
+  p.recebido = recebido;
   p.status = 'vendido';
   if(!p.data) p.data = todayISO();
   if (window.AutoSave) window.AutoSave.schedule();
@@ -2335,6 +2405,10 @@ async function saveEditPedido(){
   if(!p) return;
   const f = m.form;
   if(!f.projeto || !f.projeto.trim()){ toast('O projeto precisa de um nome'); return; }
+  const precoTexto = String(f.precoAcordado ?? '').trim();
+  if(!isPedidoOpen(p) && (!/^\d+(?:[.,]\d{1,2})?$/.test(precoTexto) || !Number.isFinite(Number(precoTexto.replace(',','.'))))){
+    toast('Indica um preço acordado válido'); return;
+  }
   const addOnError = validateAddOns(f.addOns);
   if(addOnError){ toast(addOnError); return; }
   const addOns = getStoredAddOns(f.addOns, f.addons);
@@ -2351,6 +2425,7 @@ async function saveEditPedido(){
   p.contacto = String(f.contacto||'').trim();
   p.prazo = f.prazo || null;
   p.data = f.data || null;
+  if(!isPedidoOpen(p)) p.precoAcordado = Number(precoTexto.replace(',','.'));
   p.recebido = (f.recebido===''||f.recebido===null) ? null : parseFloat(f.recebido);
   if(isPedidoOpen(p)) p.recebido = null;
   p.addOns = addOns;
@@ -2997,9 +3072,13 @@ function renderModal(){
   if(m.type==='venda'){
     return modalWrap('Marcar como vendido', `
       <div class="field">
+        <label>Preço acordado</label>
+        <div class="unit-input"><input type="number" step="0.01" min="0" value="${escapeAttr(m.precoAcordado)}" oninput="updateVendaPrice(this)" autofocus><span>€</span></div>
+      </div>
+      <div class="field">
         <label>Valor recebido</label>
-        <div class="unit-input"><input type="number" step="any" min="0" value="${m.valor}" oninput="state.modal.valor=this.value" autofocus><span>€</span></div>
-        <div class="hint">Preço de venda sugerido já preenchido — ajusta se vendeste por outro valor.</div>
+        <div class="unit-input"><input id="vendaRecebido" type="number" step="0.01" min="0" value="${escapeAttr(m.valor)}" oninput="state.modal.valor=this.value"><span>€</span></div>
+        <div class="hint">Se o pagamento ainda não entrou, deixa este campo vazio.</div>
       </div>
     `, [
       {label:'Cancelar', cls:'btn-ghost', action:'closeModal()'},
@@ -3048,6 +3127,7 @@ function renderModal(){
       </div>
       <div class="form-section-title">Composição do preço</div>
       <div id="editPedidoCostPreview">${editPedidoCostPreviewHtml(pedido, f)}</div>
+      ${isPedidoOpen(pedido) ? '' : `<div class="field"><label>Preço acordado</label><div class="unit-input"><input type="number" step="0.01" min="0" value="${escapeAttr(f.precoAcordado)}" oninput="state.modal.form.precoAcordado=this.value"><span>€</span></div></div>`}
       <div class="field"><label>Recebido</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.recebido===null?'':f.recebido}" oninput="state.modal.form.recebido=this.value" ${isPedidoOpen(pedido)?'disabled':''}><span>€</span></div></div>
       ${pedidoAttachmentsHtml(pedido, m)}
     `, [
