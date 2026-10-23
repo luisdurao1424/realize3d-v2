@@ -809,8 +809,7 @@ function pedidoLoteDetailHtml(p){
   </div>`;
 }
 
-function sameCostInputs(p, form){
-  const sameNumber = (a,b)=> (parseFloat(a)||0) === (parseFloat(b)||0);
+function samePedidoMaterials(p, form){
   const prev = (p.materiais||[]).map(m=>({
     filKey:savedMaterialFilamentKey(m),
     gramas:parseFloat(m.gramas)||0
@@ -824,15 +823,28 @@ function sameCostInputs(p, form){
     if(prev[i].filKey !== next[i].filKey) return false;
     if(prev[i].gramas !== next[i].gramas) return false;
   }
+  return true;
+}
+
+function editPedidoRates(form){
+  return {
+    taxaFalhas:form.taxaFalhas==='' ? state.config.taxaFalhas : (parseFloat(form.taxaFalhas)||0)/100,
+    margemLucro:form.margemLucro==='' ? state.config.margemLucro : (parseFloat(form.margemLucro)||0)/100
+  };
+}
+
+function sameCostInputs(p, form){
+  const sameNumber = (a,b)=> (parseFloat(a)||0) === (parseFloat(b)||0);
+  if(!samePedidoMaterials(p, form)) return false;
   if(!sameNumber(p.horas, form.horas)) return false;
   if(!sameNumber(p.costSnapshot?.addons ?? p.addons, getAddOnsTotal(form.addOns, form.addons))) return false;
   if(!sameNumber(p.costSnapshot?.maoObraHoras ?? p.maoObraHoras, form.maoObraHoras)) return false;
   if(!sameNumber(p.costSnapshot?.posProcessamento ?? p.posProcessamento, form.posProcessamento)) return false;
   if(!sameNumber(p.costSnapshot?.descontoPct ?? p.descontoPct, form.descontoPct)) return false;
   if(!sameNumber(p.costSnapshot?.custoEnvio ?? p.custoEnvio, form.custoEnvio)) return false;
-  if('taxaFalhas' in form && !sameNumber(p.taxaFalhas, form.taxaFalhas)) return false;
+  if(!sameNumber(p.costSnapshot?.taxaFalhas ?? p.taxaFalhas ?? state.config.taxaFalhas, editPedidoRates(form).taxaFalhas)) return false;
   if('bufferFalhas' in form && !sameNumber(p.bufferFalhas, form.bufferFalhas)) return false;
-  if('margemLucro' in form && !sameNumber(p.margemLucro, form.margemLucro)) return false;
+  if(!sameNumber(p.costSnapshot?.margem ?? p.margemLucro ?? state.config.margemLucro, editPedidoRates(form).margemLucro)) return false;
   if('precoManual' in form && !sameNumber(p.precoManual, form.precoManual)) return false;
   if('precoVenda' in form && !sameNumber(p.precoVenda, form.precoVenda)) return false;
   if('custoFinal' in form && !sameNumber(p.custoFinal, form.custoFinal)) return false;
@@ -1655,13 +1667,14 @@ function updateCalcPreview(){
 }
 
 function getEditPedidoCostPreview(pedido, form){
-  const taxaFalhas = pedido.costSnapshot?.taxaFalhas ?? pedido.taxaFalhas ?? state.config.taxaFalhas;
-  const margemLucro = pedido.costSnapshot?.margem ?? pedido.margemLucro ?? state.config.margemLucro;
+  const {taxaFalhas, margemLucro} = editPedidoRates(form);
   const addOns = getStoredAddOns(form.addOns, form.addons);
   const addons = getAddOnsTotal(form.addOns, form.addons);
 
   if(!sameCostInputs(pedido, form)){
-    const materiais = resolveMateriais(form.materiais);
+    const materiais = samePedidoMaterials(pedido, form)
+      ? (pedido.materiais||[]).map(m=>({...m, loteSnapshot:m.loteSnapshot || m}))
+      : resolveMateriais(form.materiais);
     return {
       materiais,
       addOns,
@@ -2254,6 +2267,8 @@ function openEditPedidoModal(id){
     maoObraHoras:p.costSnapshot?.maoObraHoras ?? p.maoObraHoras ?? '',
     posProcessamento:p.costSnapshot?.posProcessamento ?? p.posProcessamento ?? '',
     descontoPct:p.costSnapshot?.descontoPct ?? p.descontoPct ?? '',
+    taxaFalhas:(p.costSnapshot?.taxaFalhas ?? p.taxaFalhas ?? state.config.taxaFalhas)*100,
+    margemLucro:(p.costSnapshot?.margem ?? p.margemLucro ?? state.config.margemLucro)*100,
     custoEnvio:p.costSnapshot?.custoEnvio ?? p.custoEnvio ?? 0,
     envio:p.envio || p.costSnapshot?.envio || null,
     precoAcordado: isPedidoOpen(p) ? null : getPedidoSalePrice(p).toFixed(2),
@@ -2415,13 +2430,17 @@ async function saveEditPedido(){
   }
   const addOnError = validateAddOns(f.addOns);
   if(addOnError){ toast(addOnError); return; }
+  if([f.taxaFalhas,f.margemLucro].some(value=>value!=='' && (!Number.isFinite(Number(value)) || Number(value)<0))){
+    toast('Indica percentagens válidas para falhas e margem'); return;
+  }
   const addOns = getStoredAddOns(f.addOns, f.addons);
   const addons = getAddOnsTotal(f.addOns, f.addons);
+  const {taxaFalhas, margemLucro} = editPedidoRates(f);
   const shouldRecalculate = !sameCostInputs(p, f);
   console.log(shouldRecalculate ? 'Snapshot: recalculado' : 'Snapshot: mantido');
   let resolved = [];
   if(shouldRecalculate){
-    resolved = resolveMateriais(f.materiais).filter(m=>m.marca && m.gramas>0);
+    resolved = (samePedidoMaterials(p, f) ? (p.materiais||[]).map(mat=>({...mat, loteSnapshot:mat.loteSnapshot || mat})) : resolveMateriais(f.materiais)).filter(mat=>mat.marca && mat.gramas>0);
     if(resolved.length===0){ toast('Escolhe pelo menos um filamento e indica as gramas'); return; }
   }
   p.projeto = f.projeto.trim();
@@ -2437,6 +2456,8 @@ async function saveEditPedido(){
   p.maoObraHoras = parseFloat(f.maoObraHoras)||0;
   p.posProcessamento = parseFloat(f.posProcessamento)||0;
   p.descontoPct = parseFloat(f.descontoPct)||0;
+  p.taxaFalhas = taxaFalhas;
+  p.margemLucro = margemLucro;
   p.custoEnvio = parseFloat(f.custoEnvio)||0;
   p.envio = f.envio ? {...f.envio} : null;
   if(shouldRecalculate){
@@ -3123,6 +3144,10 @@ function renderModal(){
       <div class="row2">
         <div class="field"><label>Envio</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.custoEnvio}" oninput="state.modal.form.custoEnvio=this.value;state.modal.form.envio=null;updateEditPedidoCostPreview()"><span>€</span></div></div>
         <div class="field"><label>Desconto</label><div class="unit-input"><input type="number" step="any" min="0" max="100" value="${f.descontoPct}" oninput="state.modal.form.descontoPct=this.value;updateEditPedidoCostPreview()"><span>%</span></div></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>Taxa de falhas</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.taxaFalhas}" oninput="state.modal.form.taxaFalhas=this.value;updateEditPedidoCostPreview()"><span>%</span></div></div>
+        <div class="field"><label>Margem de lucro</label><div class="unit-input"><input type="number" step="any" min="0" value="${f.margemLucro}" oninput="state.modal.form.margemLucro=this.value;updateEditPedidoCostPreview()"><span>%</span></div></div>
       </div>
       <div class="field">
         <label>Add-ons</label>
